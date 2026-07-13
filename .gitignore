@@ -1,2 +1,13 @@
-# Local Git worktrees must never be committed as project files.
 .worktrees/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.env
