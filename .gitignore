@@ -11,3 +11,6 @@ dist/
 build/
 *.egg-info/
 .env
+.pka/
+*.db-wal
+*.db-shm
