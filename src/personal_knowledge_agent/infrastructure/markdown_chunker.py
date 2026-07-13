@@ -7,9 +7,7 @@ from dataclasses import dataclass
 
 from personal_knowledge_agent.domain.models import Chunk, Document, make_chunk_id
 
-_HEADING_PATTERN = re.compile(
-    r"^\s{0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$"
-)
+_HEADING_PATTERN = re.compile(r"^\s{0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$")
 _FENCE_PATTERN = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 
 
