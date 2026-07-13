@@ -72,6 +72,12 @@ def test_empty_sections_do_not_create_chunks() -> None:
     assert chunks[0].heading_path == ("Empty", "Full")
 
 
+def test_preserves_literal_hash_at_end_of_heading() -> None:
+    chunks = MarkdownChunker().split(make_document("# C#\n\nLanguage notes."))
+
+    assert chunks[0].heading_path == ("C#",)
+
+
 def test_output_is_deterministic_and_has_no_overlap() -> None:
     document = make_document("# Notes\n\none one\n\ntwo two\n\nthree three")
     chunker = MarkdownChunker(target_chars=12)
