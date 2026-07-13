@@ -8,15 +8,22 @@ from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
 from hashlib import sha256
+from math import log
 from pathlib import Path
 
-from personal_knowledge_agent.domain.errors import IndexStorageError
-from personal_knowledge_agent.domain.models import Chunk, Document
+from personal_knowledge_agent.domain.errors import (
+    IndexStorageError,
+    InvalidQueryError,
+    KnowledgeBaseEmptyError,
+)
+from personal_knowledge_agent.domain.models import Chunk, Document, SearchResult
 from personal_knowledge_agent.infrastructure.mixed_tokenizer import (
     MixedLanguageTokenizer,
 )
 
 _SCHEMA_VERSION = 1
+_BM25_K1 = 1.5
+_BM25_B = 0.75
 _SCHEMA = """
 CREATE TABLE documents (
     document_id TEXT PRIMARY KEY,
@@ -114,6 +121,122 @@ class SQLiteKeywordIndex:
                 ) from error
 
         return existed
+
+    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
+        """Return positive-scoring chunks ordered by BM25 relevance."""
+        query_tokens = list(dict.fromkeys(self._tokenizer.tokenize(query)))
+        if not query_tokens:
+            raise InvalidQueryError("Query contains no searchable terms")
+
+        with closing(self._open()) as connection:
+            try:
+                statistics = connection.execute(
+                    "SELECT COUNT(*), COALESCE(AVG(token_count), 0) FROM chunks"
+                ).fetchone()
+                chunk_count = int(statistics[0])
+                average_length = float(statistics[1])
+                if chunk_count == 0:
+                    raise KnowledgeBaseEmptyError(
+                        "Knowledge base is empty. Ingest a document first."
+                    )
+
+                rows = self._matching_postings(connection, query_tokens)
+                if not rows:
+                    return []
+                return self._rank_rows(
+                    rows,
+                    chunk_count=chunk_count,
+                    average_length=average_length,
+                    limit=limit,
+                )
+            except (
+                sqlite3.Error,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as error:
+                raise IndexStorageError(
+                    f"Could not search knowledge index: {self._database_path}"
+                ) from error
+
+    @staticmethod
+    def _matching_postings(
+        connection: sqlite3.Connection,
+        query_tokens: list[str],
+    ) -> list[sqlite3.Row]:
+        placeholders = ", ".join("?" for _ in query_tokens)
+        query = f"""
+            SELECT
+                p.token,
+                p.frequency,
+                c.chunk_id,
+                c.document_id,
+                c.position,
+                c.text,
+                c.heading_path,
+                c.token_count,
+                d.source
+            FROM postings AS p
+            JOIN chunks AS c ON c.chunk_id = p.chunk_id
+            JOIN documents AS d ON d.document_id = c.document_id
+            WHERE p.token IN ({placeholders})
+        """
+        return list(connection.execute(query, query_tokens).fetchall())
+
+    @staticmethod
+    def _rank_rows(
+        rows: list[sqlite3.Row],
+        *,
+        chunk_count: int,
+        average_length: float,
+        limit: int,
+    ) -> list[SearchResult]:
+        document_frequencies = Counter(str(row["token"]) for row in rows)
+        scores: dict[str, float] = {}
+        chunks: dict[str, tuple[Chunk, str]] = {}
+        safe_average = average_length if average_length > 0 else 1.0
+
+        for row in rows:
+            token = str(row["token"])
+            chunk_id = str(row["chunk_id"])
+            frequency = int(row["frequency"])
+            document_length = int(row["token_count"])
+            document_frequency = document_frequencies[token]
+            inverse_frequency = log(
+                1
+                + (chunk_count - document_frequency + 0.5) / (document_frequency + 0.5)
+            )
+            denominator = frequency + _BM25_K1 * (
+                1 - _BM25_B + _BM25_B * document_length / safe_average
+            )
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + (
+                inverse_frequency * frequency * (_BM25_K1 + 1) / denominator
+            )
+
+            if chunk_id not in chunks:
+                heading_value = json.loads(str(row["heading_path"]))
+                if not isinstance(heading_value, list) or not all(
+                    isinstance(item, str) for item in heading_value
+                ):
+                    raise ValueError("Stored heading_path is not a string list")
+                chunk = Chunk(
+                    chunk_id=chunk_id,
+                    document_id=str(row["document_id"]),
+                    position=int(row["position"]),
+                    text=str(row["text"]),
+                    heading_path=tuple(heading_value),
+                )
+                chunks[chunk_id] = (chunk, str(row["source"]))
+
+        ranked = [
+            SearchResult(
+                chunk=chunks[chunk_id][0], source=chunks[chunk_id][1], score=score
+            )
+            for chunk_id, score in scores.items()
+            if score > 0
+        ]
+        ranked.sort(key=lambda result: (-result.score, result.chunk.chunk_id))
+        return ranked[:limit]
 
     def _insert_chunk(
         self,
