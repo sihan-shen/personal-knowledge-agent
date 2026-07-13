@@ -110,7 +110,9 @@ class MarkdownChunker:
         current_text = ""
 
         for block in blocks:
-            candidate = f"{current_text}\n\n{block.text}" if current_text else block.text
+            candidate = (
+                f"{current_text}\n\n{block.text}" if current_text else block.text
+            )
             must_split = current_text and (
                 block.heading_path != current_heading
                 or len(candidate) > self._target_chars

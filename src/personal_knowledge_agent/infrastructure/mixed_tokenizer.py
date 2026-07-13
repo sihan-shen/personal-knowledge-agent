@@ -12,8 +12,7 @@ _TOKEN_PATTERN = re.compile(
 
 def _is_cjk_sequence(value: str) -> bool:
     return all(
-        "\u3400" <= character <= "\u4dbf"
-        or "\u4e00" <= character <= "\u9fff"
+        "\u3400" <= character <= "\u4dbf" or "\u4e00" <= character <= "\u9fff"
         for character in value
     )
 
