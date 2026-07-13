@@ -1,0 +1,2 @@
+# Local Git worktrees must never be committed as project files.
+.worktrees/
