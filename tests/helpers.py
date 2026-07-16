@@ -70,3 +70,22 @@ class FakeLanguageModel:
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
+
+
+class ScriptedLanguageModel:
+    """Return a finite sequence of configured outputs or failures."""
+
+    def __init__(self, results: Sequence[ModelOutput | Exception]) -> None:
+        self._results = tuple(results)
+        self._position = 0
+        self.calls: list[tuple[ChatMessage, ...]] = []
+
+    def generate(self, messages: Sequence[ChatMessage]) -> ModelOutput:
+        self.calls.append(tuple(messages))
+        if self._position >= len(self._results):
+            raise AssertionError("No scripted language-model result remains")
+        result = self._results[self._position]
+        self._position += 1
+        if isinstance(result, Exception):
+            raise result
+        return result

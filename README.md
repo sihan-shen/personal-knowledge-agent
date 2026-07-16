@@ -4,12 +4,12 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 2A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
-and hybrid retrieval, plus evidence-grounded answers through an OpenAI-compatible
-Chat Completions endpoint. Embeddings run locally on CPU and are stored in SQLite
-alongside the BM25 index. Answer generation is deliberately not an Agent yet:
-`pka ask` always retrieves, while later routing will decide whether retrieval or a
-different tool is needed.
+Phase 2B provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+and hybrid retrieval, evidence-grounded answers through an OpenAI-compatible Chat
+Completions endpoint, and a conservative Agent router. Embeddings run locally on CPU
+and are stored in SQLite alongside the BM25 index. `pka ask` remains a fixed RAG
+pipeline that always retrieves; `pka agent` visibly chooses a safe local direct
+response or the same grounded retrieval path.
 
 ## Prerequisites
 
@@ -56,8 +56,8 @@ uv run pka health
 
 ## Configure answer generation
 
-`pka ask` requires an API key in the shell. The defaults target DeepSeek's
-OpenAI-compatible endpoint and the `deepseek-v4-flash` model:
+`pka ask` and `pka agent` require an API key in the shell. The defaults target
+DeepSeek's OpenAI-compatible endpoint and the `deepseek-v4-flash` model:
 
 ```bash
 export PKA_LLM_API_KEY="your-key"
@@ -140,6 +140,46 @@ ID, heading path, and text. Absolute source paths, stable chunk IDs, retrieval s
 the API key, and the embedding vectors remain local. Retrieved text can still be
 private, so configure only a provider you trust and understand its data policy before
 using `ask`.
+
+## Let the Agent choose whether to retrieve
+
+Use `agent` when you want the routing decision to be part of the workflow:
+
+```bash
+uv run pka agent "你好" --db data/knowledge.db
+uv run pka agent "RAG 为什么需要检索？" --db data/knowledge.db
+```
+
+The route is always printed before the response:
+
+```text
+Route: direct (greeting, rule)
+你好。我可以在需要时检索你的本地知识库，并用引用回答问题。
+```
+
+```text
+Route: retrieve (llm)
+Answer:
+...
+```
+
+Direct responses are deliberately limited to whole-message greetings, capability
+questions, and thanks. Factual, learning, personal-knowledge, mixed, ambiguous, and
+uncertain requests retrieve. For example, `你好，请解释 RAG` retrieves because the
+greeting is combined with a knowledge request. Phase 2B does not allow uncited
+direct factual answers.
+
+The hybrid router uses exact local rules first, then asks the configured model for
+one strict two-field JSON decision. A rule match makes no model request. An LLM
+direct decision makes one routing request and renders a local template. A normal
+retrieval answer usually makes two model calls—one to route and one to generate the
+grounded answer—although empty retrieval returns a local refusal after the routing
+call. Provider or invalid-JSON routing failures are displayed as safe fallback
+categories and fail closed to retrieval; raw provider details are not printed.
+
+Only the question is sent during LLM routing. Retrieved chunks are sent later only
+when the chosen route is `retrieve`. `pka ask` remains available when you explicitly
+want retrieval without a routing call.
 
 The adapter requests one non-streaming JSON object through Chat Completions. JSON
 mode only helps the provider produce syntactically valid JSON; the project still

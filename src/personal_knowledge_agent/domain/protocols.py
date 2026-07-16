@@ -12,9 +12,18 @@ from personal_knowledge_agent.domain.models import (
     Document,
     Embedding,
     ModelOutput,
+    RouteDecision,
     SearchMode,
     SearchResult,
 )
+
+
+class QuestionRouter(Protocol):
+    """Choose the safe response path for one user question."""
+
+    def route(self, question: str) -> RouteDecision:
+        """Return one validated route decision."""
+        ...
 
 
 class LanguageModel(Protocol):

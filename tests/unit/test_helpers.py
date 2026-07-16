@@ -4,7 +4,7 @@ import pytest
 
 from personal_knowledge_agent.domain.errors import EmbeddingError, LanguageModelError
 from personal_knowledge_agent.domain.models import ChatMessage, MessageRole, ModelOutput
-from tests.helpers import FakeEmbedder, FakeLanguageModel
+from tests.helpers import FakeEmbedder, FakeLanguageModel, ScriptedLanguageModel
 
 
 def test_fake_embedder_normalizes_vectors_and_records_boundary_calls() -> None:
@@ -45,4 +45,33 @@ def test_fake_language_model_raises_configured_error() -> None:
     model = FakeLanguageModel(LanguageModelError("offline"))
 
     with pytest.raises(LanguageModelError, match="offline"):
+        model.generate((ChatMessage(MessageRole.USER, "question"),))
+
+
+def test_scripted_language_model_returns_results_in_order_and_records_calls() -> None:
+    first = ModelOutput("router", '{"action":"retrieve"}', "stop")
+    second = ModelOutput("answer", '{"status":"answered"}', "stop")
+    model = ScriptedLanguageModel([first, second])
+    messages = (ChatMessage(MessageRole.USER, "question"),)
+
+    assert model.generate(messages) == first
+    assert model.generate(messages) == second
+    assert model.calls == [messages, messages]
+
+
+def test_scripted_language_model_raises_configured_error_then_continues() -> None:
+    expected = ModelOutput("answer", '{"status":"answered"}', "stop")
+    model = ScriptedLanguageModel([LanguageModelError("offline"), expected])
+    messages = (ChatMessage(MessageRole.USER, "question"),)
+
+    with pytest.raises(LanguageModelError, match="offline"):
+        model.generate(messages)
+
+    assert model.generate(messages) == expected
+
+
+def test_scripted_language_model_fails_clearly_when_exhausted() -> None:
+    model = ScriptedLanguageModel([])
+
+    with pytest.raises(AssertionError, match="No scripted"):
         model.generate((ChatMessage(MessageRole.USER, "question"),))

@@ -47,6 +47,36 @@ class AnswerStatus(StrEnum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class RouteAction(StrEnum):
+    """Paths the agent can choose for one user request."""
+
+    DIRECT = "direct"
+    RETRIEVE = "retrieve"
+
+
+class DirectIntent(StrEnum):
+    """Safe conversational intents that need no knowledge evidence."""
+
+    GREETING = "greeting"
+    CAPABILITIES = "capabilities"
+    THANKS = "thanks"
+
+
+class RouteSource(StrEnum):
+    """How an agent route decision was produced."""
+
+    RULE = "rule"
+    LLM = "llm"
+    FALLBACK = "fallback"
+
+
+class RouterFallbackReason(StrEnum):
+    """Safe categories for fail-closed router decisions."""
+
+    PROVIDER_ERROR = "provider_error"
+    INVALID_OUTPUT = "invalid_output"
+
+
 @dataclass(frozen=True, slots=True)
 class ChatMessage:
     """One provider-neutral language-model message."""
@@ -144,6 +174,48 @@ class GroundedAnswer:
 
     def __post_init__(self) -> None:
         _require_text(self.answer, "answer")
+
+
+@dataclass(frozen=True, slots=True)
+class RouteDecision:
+    """One validated decision about how the agent should respond."""
+
+    action: RouteAction
+    direct_intent: DirectIntent | None
+    source: RouteSource
+    fallback_reason: RouterFallbackReason | None = None
+
+    def __post_init__(self) -> None:
+        if self.action is RouteAction.DIRECT and self.direct_intent is None:
+            raise ValueError("direct route requires a direct intent")
+        if self.action is RouteAction.RETRIEVE and self.direct_intent is not None:
+            raise ValueError("retrieve route must not have a direct intent")
+        if self.source is RouteSource.FALLBACK:
+            if self.action is not RouteAction.RETRIEVE or self.fallback_reason is None:
+                raise ValueError(
+                    "fallback route must retrieve and include a fallback reason"
+                )
+        elif self.fallback_reason is not None:
+            raise ValueError("non-fallback route must not include a fallback reason")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentResponse:
+    """Either a local direct response or a grounded answer plus its route."""
+
+    route: RouteDecision
+    direct_answer: str | None
+    grounded_answer: GroundedAnswer | None
+
+    def __post_init__(self) -> None:
+        if (self.direct_answer is None) == (self.grounded_answer is None):
+            raise ValueError("agent response must contain exactly one answer")
+        if self.route.action is RouteAction.DIRECT:
+            if self.direct_answer is None:
+                raise ValueError("direct route requires a direct answer")
+            _require_text(self.direct_answer, "direct_answer")
+        elif self.grounded_answer is None:
+            raise ValueError("retrieve route requires a grounded answer")
 
 
 @dataclass(frozen=True, slots=True)
