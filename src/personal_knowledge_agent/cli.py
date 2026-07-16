@@ -203,8 +203,11 @@ def _format_route(decision: RouteDecision) -> str:
     return f"Route: retrieve ({decision.source.value})"
 
 
-def _print_agent_response(response: AgentResponse) -> None:
-    print(_format_route(response.route))
+def _print_route(decision: RouteDecision) -> None:
+    print(_format_route(decision))
+
+
+def _print_agent_answer(response: AgentResponse) -> None:
     if response.direct_answer is not None:
         print(response.direct_answer)
         return
@@ -224,8 +227,8 @@ def _agent(query: str, limit: int, mode: SearchMode, database: Path) -> None:
     response = AgentService(
         HybridQuestionRouter(language_model),
         answer_service,
-    ).respond(query, limit=limit, mode=mode)
-    _print_agent_response(response)
+    ).respond(query, limit=limit, mode=mode, on_route=_print_route)
+    _print_agent_answer(response)
 
 
 def main(arguments: Sequence[str] | None = None) -> None:

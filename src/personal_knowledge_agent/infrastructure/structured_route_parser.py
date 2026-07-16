@@ -17,10 +17,24 @@ from personal_knowledge_agent.domain.models import (
 _EXPECTED_FIELDS = {"action", "direct_intent"}
 
 
+def _build_unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise InvalidRouteSchemaError(
+                "Router output must not contain a duplicate field"
+            )
+        payload[key] = value
+    return payload
+
+
 def parse_route_decision(output: ModelOutput) -> RouteDecision:
     """Validate the exact route JSON contract without repairing model output."""
     try:
-        payload: Any = json.loads(output.content)
+        payload: Any = json.loads(
+            output.content,
+            object_pairs_hook=_build_unique_object,
+        )
     except json.JSONDecodeError as error:
         raise InvalidRouteSchemaError(
             "Router output must be valid JSON without Markdown fences"

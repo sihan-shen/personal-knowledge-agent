@@ -101,3 +101,15 @@ def test_route_error_does_not_echo_provider_output() -> None:
         parse_route_decision(output(f"not JSON {secret}"))
 
     assert secret not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        ('{"action":"retrieve","action":"direct","direct_intent":"greeting"}'),
+        ('{"action":"direct","direct_intent":"greeting","direct_intent":"thanks"}'),
+    ],
+)
+def test_rejects_duplicate_json_fields(content: str) -> None:
+    with pytest.raises(InvalidRouteSchemaError, match="duplicate field"):
+        parse_route_decision(output(content))

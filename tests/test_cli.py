@@ -424,6 +424,34 @@ def test_agent_llm_retrieve_displays_route_then_grounded_answer(
     assert len(model.calls) == 2
 
 
+def test_agent_llm_direct_displays_route_and_local_template(tmp_path: Path) -> None:
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"direct","direct_intent":"capabilities"}',
+                "stop",
+            )
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "Tell me how you can help",
+        "--db",
+        str(tmp_path / "knowledge.db"),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: direct (capabilities, llm)\n"
+        "I can search your local knowledge base, answer from retrieved evidence, "
+        "and show cited sources.\n"
+    )
+    assert len(model.calls) == 1
+
+
 @pytest.mark.parametrize(
     ("router_result", "route_line"),
     [
@@ -468,6 +496,75 @@ def test_agent_router_failure_displays_safe_fallback_and_retrieves(
     assert result.returncode == 0
     assert result.stdout.startswith(route_line + "Answer:\nGrounded. [S1]\n")
     assert "provider-body-secret-123" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("router_result", "route_line"),
+    [
+        (
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            "Route: retrieve (llm)\n",
+        ),
+        (
+            LanguageModelError("router failed"),
+            "Route: retrieve (fallback: provider error)\n",
+        ),
+    ],
+)
+def test_agent_keeps_route_visible_when_grounded_generation_fails(
+    tmp_path: Path,
+    router_result: ModelOutput | Exception,
+    route_line: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [router_result, LanguageModelError("answer generation failed")]
+    )
+
+    result = run_cli(
+        "agent",
+        "How does RAG work?",
+        "--db",
+        str(database),
+        language_model=model,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == route_line
+    assert "answer generation failed" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            )
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How does RAG work?",
+        "--db",
+        str(tmp_path / "empty.db"),
+        language_model=model,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == "Route: retrieve (llm)\n"
+    assert "Knowledge base is empty" in result.stderr
     assert "Traceback" not in result.stderr
 
 

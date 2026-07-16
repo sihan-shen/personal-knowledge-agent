@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.domain.errors import InvalidQueryError
 from personal_knowledge_agent.domain.models import (
     AgentResponse,
     DirectIntent,
     RouteAction,
+    RouteDecision,
     SearchMode,
 )
 from personal_knowledge_agent.domain.protocols import QuestionRouter
@@ -66,6 +69,7 @@ class AgentService:
         *,
         limit: int = 5,
         mode: SearchMode = SearchMode.HYBRID,
+        on_route: Callable[[RouteDecision], None] | None = None,
     ) -> AgentResponse:
         """Choose a route and return exactly one corresponding answer."""
         if not question.strip():
@@ -74,6 +78,8 @@ class AgentService:
             raise InvalidQueryError("Agent evidence limit must be between 1 and 10")
 
         route = self._router.route(question)
+        if on_route is not None:
+            on_route(route)
         if route.action is RouteAction.DIRECT:
             assert route.direct_intent is not None
             return AgentResponse(

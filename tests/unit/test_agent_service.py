@@ -9,7 +9,7 @@ import pytest
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.search import SearchService
-from personal_knowledge_agent.domain.errors import InvalidQueryError
+from personal_knowledge_agent.domain.errors import InvalidQueryError, LanguageModelError
 from personal_knowledge_agent.domain.models import (
     AnswerStatus,
     Chunk,
@@ -60,17 +60,18 @@ class FakeIndex:
         return self._results
 
 
-def make_answer_service() -> tuple[AnswerService, FakeIndex, FakeLanguageModel]:
+def make_answer_service(
+    model_result: ModelOutput | Exception | None = None,
+) -> tuple[AnswerService, FakeIndex, FakeLanguageModel]:
     chunk = Chunk("chunk", "document", 0, "RAG uses evidence.", ("RAG",))
     index = FakeIndex([SearchResult(chunk, "/notes/rag.md", 0.9)])
-    model = FakeLanguageModel(
-        ModelOutput(
-            "answer-model",
-            '{"status":"answered","answer":"RAG uses evidence. [S1]",'
-            '"citation_ids":["S1"]}',
-            "stop",
-        )
+    default_output = ModelOutput(
+        "answer-model",
+        '{"status":"answered","answer":"RAG uses evidence. [S1]",'
+        '"citation_ids":["S1"]}',
+        "stop",
     )
+    model = FakeLanguageModel(model_result or default_output)
     return AnswerService(SearchService(index), model), index, model
 
 
@@ -178,3 +179,18 @@ def test_invalid_input_is_rejected_before_router_or_answer_dependencies(
     assert router.calls == []
     assert index.calls == []
     assert model.calls == []
+
+
+def test_route_observer_runs_before_grounded_answer_failure() -> None:
+    route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
+    router = FakeRouter(route)
+    answer_service, _, _ = make_answer_service(LanguageModelError("answer failed"))
+    observed: list[RouteDecision] = []
+
+    with pytest.raises(LanguageModelError, match="answer failed"):
+        AgentService(router, answer_service).respond(
+            "How does RAG work?",
+            on_route=observed.append,
+        )
+
+    assert observed == [route]

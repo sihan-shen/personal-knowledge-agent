@@ -41,8 +41,8 @@ Chat Completions adapter. Its prompt asks for exactly:
 or a direct decision with one of `greeting`, `capabilities`, and `thanks`. JSON mode
 does not prove that fields, enum values, or combinations are correct. The local
 parser rejects malformed JSON, code fences, arrays, missing or extra fields, wrong
-types, unknown values, direct without an intent, and retrieve with an intent. It
-does not repair a response or echo provider content in an error.
+types, duplicate field names, unknown values, direct without an intent, and retrieve
+with an intent. It does not repair a response or echo provider content in an error.
 
 ## Why the hybrid router uses rules first
 
