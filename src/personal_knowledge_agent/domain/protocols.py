@@ -6,7 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from personal_knowledge_agent.domain.models import Chunk, Document, SearchResult
+from personal_knowledge_agent.domain.models import (
+    Chunk,
+    Document,
+    Embedding,
+    SearchResult,
+)
 
 
 class DocumentLoader(Protocol):
@@ -22,6 +27,23 @@ class Chunker(Protocol):
 
     def split(self, document: Document) -> list[Chunk]:
         """Create deterministic chunks from a document."""
+        ...
+
+
+class EmbeddingModel(Protocol):
+    """Encode documents and questions in a shared vector space."""
+
+    @property
+    def model_id(self) -> str:
+        """Return the stable identifier for vectors this model creates."""
+        ...
+
+    def embed_documents(self, texts: Sequence[str]) -> list[Embedding]:
+        """Encode document passages for persistent retrieval."""
+        ...
+
+    def embed_query(self, query: str) -> Embedding:
+        """Encode one user question for retrieval."""
         ...
 
 
