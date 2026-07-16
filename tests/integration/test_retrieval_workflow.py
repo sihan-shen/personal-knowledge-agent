@@ -11,14 +11,22 @@ from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoad
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
     SQLiteKeywordIndex,
 )
+from tests.helpers import FakeEmbedder
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "knowledge"
+
+
+def make_index(database: Path) -> SQLiteKeywordIndex:
+    return SQLiteKeywordIndex(
+        database,
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    )
 
 
 @pytest.fixture
 def populated_database(tmp_path: Path) -> Path:
     database = tmp_path / "knowledge.db"
-    index = SQLiteKeywordIndex(database)
+    index = make_index(database)
     service = IngestService(MarkdownLoader(), MarkdownChunker(), index)
     for name in ("rag_notes.md", "python_agents.md", "unrelated_notes.md"):
         service.ingest(FIXTURES / name)
@@ -38,7 +46,7 @@ def test_bilingual_queries_rank_relevant_source_first(
     query: str,
     expected_source: str,
 ) -> None:
-    service = SearchService(SQLiteKeywordIndex(populated_database))
+    service = SearchService(make_index(populated_database))
 
     results = service.search(query)
 

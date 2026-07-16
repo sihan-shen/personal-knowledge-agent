@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import struct
 from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
@@ -12,16 +13,23 @@ from math import log
 from pathlib import Path
 
 from personal_knowledge_agent.domain.errors import (
+    EmbeddingError,
     IndexStorageError,
     InvalidQueryError,
     KnowledgeBaseEmptyError,
 )
-from personal_knowledge_agent.domain.models import Chunk, Document, SearchResult
+from personal_knowledge_agent.domain.models import (
+    Chunk,
+    Document,
+    Embedding,
+    SearchResult,
+)
+from personal_knowledge_agent.domain.protocols import EmbeddingModel
 from personal_knowledge_agent.infrastructure.mixed_tokenizer import (
     MixedLanguageTokenizer,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _BM25_K1 = 1.5
 _BM25_B = 0.75
 _SCHEMA = """
@@ -51,7 +59,50 @@ CREATE TABLE postings (
 );
 
 CREATE INDEX idx_postings_token ON postings(token);
+
+CREATE TABLE embeddings (
+    chunk_id TEXT PRIMARY KEY
+        REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
+
+CREATE INDEX idx_embeddings_model_id ON embeddings(model_id);
 """
+
+_EMBEDDINGS_SCHEMA = """
+CREATE TABLE embeddings (
+    chunk_id TEXT PRIMARY KEY
+        REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
+
+CREATE INDEX idx_embeddings_model_id ON embeddings(model_id);
+"""
+
+
+def _pack_vector(values: Sequence[float]) -> bytes:
+    try:
+        return struct.pack(f"<{len(values)}f", *values)
+    except (OverflowError, struct.error) as error:
+        raise EmbeddingError("Embedding values cannot be stored as float32") from error
+
+
+def _unpack_vector(value: bytes, *, dimensions: int) -> tuple[float, ...]:
+    if dimensions <= 0:
+        raise IndexStorageError("Stored embedding dimension must be positive")
+    expected_length = dimensions * 4
+    if len(value) != expected_length:
+        raise IndexStorageError(
+            "Stored embedding byte length does not match its dimension"
+        )
+    try:
+        return tuple(struct.unpack(f"<{dimensions}f", value))
+    except struct.error as error:
+        raise IndexStorageError("Stored embedding vector is invalid") from error
 
 
 class SQLiteKeywordIndex:
@@ -60,9 +111,11 @@ class SQLiteKeywordIndex:
     def __init__(
         self,
         database_path: Path,
+        embedding_model: EmbeddingModel,
         tokenizer: MixedLanguageTokenizer | None = None,
     ) -> None:
         self._database_path = database_path.expanduser().resolve()
+        self._embedding_model = embedding_model
         self._tokenizer = tokenizer or MixedLanguageTokenizer()
         try:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +136,8 @@ class SQLiteKeywordIndex:
                 raise IndexStorageError(
                     f"Chunk {chunk.chunk_id} belongs to a different document"
                 )
+
+        embeddings = self._prepare_embeddings(chunks)
 
         with closing(self._open()) as connection:
             try:
@@ -111,8 +166,9 @@ class SQLiteKeywordIndex:
                         sha256(document.content.encode("utf-8")).hexdigest(),
                     ),
                 )
-                for chunk in chunks:
+                for chunk, embedding in zip(chunks, embeddings, strict=True):
                     self._insert_chunk(connection, chunk)
+                    self._insert_embedding(connection, chunk.chunk_id, embedding)
                 connection.commit()
             except sqlite3.Error as error:
                 connection.rollback()
@@ -243,7 +299,7 @@ class SQLiteKeywordIndex:
         connection: sqlite3.Connection,
         chunk: Chunk,
     ) -> None:
-        searchable_text = f"{' '.join(chunk.heading_path)}\n{chunk.text}"
+        searchable_text = self._searchable_text(chunk)
         frequencies = Counter(self._tokenizer.tokenize(searchable_text))
         connection.execute(
             """
@@ -268,6 +324,50 @@ class SQLiteKeywordIndex:
             ),
         )
 
+    def _prepare_embeddings(self, chunks: Sequence[Chunk]) -> list[Embedding]:
+        texts = [self._searchable_text(chunk) for chunk in chunks]
+        embeddings = self._embedding_model.embed_documents(texts)
+        if len(embeddings) != len(chunks):
+            raise EmbeddingError(
+                f"Embedding model returned {len(embeddings)} vectors for "
+                f"{len(chunks)} chunks"
+            )
+
+        dimensions: set[int] = set()
+        for embedding in embeddings:
+            if embedding.model_id != self._embedding_model.model_id:
+                raise EmbeddingError(
+                    "Embedding model identifier does not match configured model"
+                )
+            dimensions.add(len(embedding.values))
+            _pack_vector(embedding.values)
+        if len(dimensions) > 1:
+            raise EmbeddingError("Chunk embeddings must have one common dimension")
+        return embeddings
+
+    @staticmethod
+    def _searchable_text(chunk: Chunk) -> str:
+        return f"{' '.join(chunk.heading_path)}\n{chunk.text}"
+
+    @staticmethod
+    def _insert_embedding(
+        connection: sqlite3.Connection,
+        chunk_id: str,
+        embedding: Embedding,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO embeddings(chunk_id, model_id, dimensions, vector)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                chunk_id,
+                embedding.model_id,
+                len(embedding.values),
+                _pack_vector(embedding.values),
+            ),
+        )
+
     def _initialize_schema(self) -> None:
         with closing(self._open()) as connection:
             try:
@@ -275,6 +375,10 @@ class SQLiteKeywordIndex:
                 version = int(row[0]) if row is not None else 0
                 if version == 0:
                     connection.executescript(_SCHEMA)
+                    connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+                    connection.commit()
+                elif version == 1:
+                    connection.executescript(_EMBEDDINGS_SCHEMA)
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
                     connection.commit()
                 elif version != _SCHEMA_VERSION:

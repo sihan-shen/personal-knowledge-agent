@@ -11,6 +11,7 @@ from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import KnowledgeError
 from personal_knowledge_agent.domain.models import SearchResult
+from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
@@ -55,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _ingest(path: Path, database: Path) -> None:
-    index = SQLiteKeywordIndex(database)
+    index = SQLiteKeywordIndex(database, E5Embedder())
     service = IngestService(MarkdownLoader(), MarkdownChunker(), index)
     result = service.ingest(path)
     action = "Reindexed" if result.replaced else "Indexed"
@@ -80,7 +81,8 @@ def _format_result(position: int, result: SearchResult) -> str:
 
 
 def _search(query: str, limit: int, database: Path) -> None:
-    results = SearchService(SQLiteKeywordIndex(database)).search(query, limit=limit)
+    index = SQLiteKeywordIndex(database, E5Embedder())
+    results = SearchService(index).search(query, limit=limit)
     if not results:
         print("No relevant chunks found.")
         return

@@ -23,3 +23,9 @@ def test_fake_embedder_rejects_unknown_text_without_model_runtime() -> None:
 
     with pytest.raises(EmbeddingError, match="No fake embedding"):
         embedder.embed_query("unknown")
+
+
+def test_fake_embedder_can_supply_a_default_for_unimportant_test_text() -> None:
+    embedder = FakeEmbedder({}, default_vector=(2.0, 0.0))
+
+    assert embedder.embed_documents(["anything"])[0].values == (1.0, 0.0)

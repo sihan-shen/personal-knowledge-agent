@@ -17,9 +17,11 @@ class FakeEmbedder:
         vectors: Mapping[str, Sequence[float]],
         *,
         model_id: str = "test-embedding-model",
+        default_vector: Sequence[float] | None = None,
     ) -> None:
         self._vectors = vectors
         self._model_id = model_id
+        self._default_vector = default_vector
         self.document_calls: list[list[str]] = []
         self.query_calls: list[str] = []
 
@@ -39,7 +41,11 @@ class FakeEmbedder:
         try:
             values = tuple(float(value) for value in self._vectors[text])
         except KeyError as error:
-            raise EmbeddingError(f"No fake embedding configured for: {text}") from error
+            if self._default_vector is None:
+                raise EmbeddingError(
+                    f"No fake embedding configured for: {text}"
+                ) from error
+            values = tuple(float(value) for value in self._default_vector)
 
         if not values or not all(isfinite(value) for value in values):
             raise EmbeddingError(f"Invalid fake embedding configured for: {text}")

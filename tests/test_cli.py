@@ -1,20 +1,43 @@
-"""Black-box tests for the command-line interface."""
+"""Behavioral tests for the command-line interface."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
+
+from personal_knowledge_agent.cli import main
+from tests.helpers import FakeEmbedder
 
 
-def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
-    """Run the package module as a user would invoke the CLI."""
-    return subprocess.run(
-        [sys.executable, "-m", "personal_knowledge_agent.cli", *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+@dataclass(frozen=True)
+class CliResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_cli(*arguments: str) -> CliResult:
+    """Run the CLI with deterministic embeddings and capture its process contract."""
+    stdout = StringIO()
+    stderr = StringIO()
+    returncode = 0
+    embedder = FakeEmbedder({}, default_vector=(1.0, 0.0))
+    with (
+        patch(
+            "personal_knowledge_agent.cli.E5Embedder",
+            return_value=embedder,
+        ),
+        redirect_stdout(stdout),
+        redirect_stderr(stderr),
+    ):
+        try:
+            main(arguments)
+        except SystemExit as error:
+            returncode = int(error.code or 0)
+    return CliResult(returncode, stdout.getvalue(), stderr.getvalue())
 
 
 def test_health_command_reports_healthy_project() -> None:

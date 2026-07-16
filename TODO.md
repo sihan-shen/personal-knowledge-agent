@@ -10,8 +10,8 @@ steps belong in `docs/superpowers/`.
 - [x] Define `Embedding`, `SearchMode`, `EmbeddingModel`, and related tests.
 - [x] Add the lazy E5 adapter with `passage:` and `query:` prefixes.
 - [x] Add deterministic fake-embedder tests without model downloads.
-- [ ] Migrate SQLite from schema v1 to v2 and persist float32 embeddings.
-- [ ] Guarantee re-ingestion atomically replaces postings and vectors together.
+- [x] Migrate SQLite from schema v1 to v2 and persist float32 embeddings.
+- [x] Guarantee re-ingestion atomically replaces postings and vectors together.
 - [ ] Implement exact cosine semantic retrieval.
 - [ ] Implement RRF fusion and `lexical`, `semantic`, `hybrid` search modes.
 - [ ] Expose search mode through `pka search --mode`.
