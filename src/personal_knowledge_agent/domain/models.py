@@ -32,6 +32,32 @@ class SearchMode(StrEnum):
     HYBRID = "hybrid"
 
 
+class MessageRole(StrEnum):
+    """Provider-neutral roles for language-model messages."""
+
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class AnswerStatus(StrEnum):
+    """Whether an answer is supported by retrieved evidence."""
+
+    ANSWERED = "answered"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+@dataclass(frozen=True, slots=True)
+class ChatMessage:
+    """One provider-neutral language-model message."""
+
+    role: MessageRole
+    content: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.content, "content")
+
+
 @dataclass(frozen=True, slots=True)
 class Document:
     """A loaded source document before chunking."""
@@ -70,6 +96,54 @@ class SearchResult:
     chunk: Chunk
     source: str
     score: float
+
+
+@dataclass(frozen=True, slots=True)
+class Evidence:
+    """A retrieved chunk with a request-local citation label."""
+
+    citation_id: str
+    chunk_id: str
+    source: str
+    heading_path: tuple[str, ...]
+    text: str
+    retrieval_score: float
+
+    def __post_init__(self) -> None:
+        _require_text(self.citation_id, "citation_id")
+        _require_text(self.chunk_id, "chunk_id")
+        _require_text(self.source, "source")
+        _require_text(self.text, "text")
+        if not isfinite(self.retrieval_score):
+            raise ValueError("retrieval_score must be finite")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelOutput:
+    """Provider output translated into project-owned values."""
+
+    model_id: str
+    content: str
+    finish_reason: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.model_id, "model_id")
+        _require_text(self.content, "content")
+        _require_text(self.finish_reason, "finish_reason")
+
+
+@dataclass(frozen=True, slots=True)
+class GroundedAnswer:
+    """A structured answer and every evidence chunk supplied to produce it."""
+
+    status: AnswerStatus
+    answer: str
+    citation_ids: tuple[str, ...]
+    evidence: tuple[Evidence, ...]
+    model_id: str | None
+
+    def __post_init__(self) -> None:
+        _require_text(self.answer, "answer")
 
 
 @dataclass(frozen=True, slots=True)

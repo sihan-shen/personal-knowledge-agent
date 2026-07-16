@@ -7,12 +7,22 @@ from pathlib import Path
 from typing import Protocol
 
 from personal_knowledge_agent.domain.models import (
+    ChatMessage,
     Chunk,
     Document,
     Embedding,
+    ModelOutput,
     SearchMode,
     SearchResult,
 )
+
+
+class LanguageModel(Protocol):
+    """Generate provider-neutral output from an ordered message sequence."""
+
+    def generate(self, messages: Sequence[ChatMessage]) -> ModelOutput:
+        """Return one complete model response."""
+        ...
 
 
 class DocumentLoader(Protocol):
