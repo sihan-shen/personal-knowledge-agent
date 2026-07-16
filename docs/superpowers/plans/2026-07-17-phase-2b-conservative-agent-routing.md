@@ -60,7 +60,7 @@
 - Consumes: existing `GroundedAnswer` and `InvalidQueryError`.
 - Produces: `RouteAction`, `DirectIntent`, `RouteSource`, `RouterFallbackReason`, `RouteDecision`, `AgentResponse`, `QuestionRouter.route(question: str) -> RouteDecision`, and `InvalidRouteSchemaError`.
 
-- [ ] **Step 1: Write failing routing-model tests**
+- [x] **Step 1: Write failing routing-model tests**
 
 Add focused tests equivalent to:
 
@@ -94,7 +94,7 @@ def test_agent_response_contains_exactly_one_answer() -> None:
         AgentResponse(route, None, None)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -104,7 +104,7 @@ TMPDIR=/tmp UV_PROJECT_ENVIRONMENT=/tmp/pka-phase2b-venv UV_CACHE_DIR=/tmp/uv-ca
 
 Expected: collection fails because the routing types do not exist.
 
-- [ ] **Step 3: Add the minimum contracts**
+- [x] **Step 3: Add the minimum contracts**
 
 Implement the approved enums and frozen records. `RouteDecision.__post_init__` must enforce:
 
@@ -129,11 +129,11 @@ class QuestionRouter(Protocol):
         ...
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the targeted model tests, Ruff, and mypy. Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/personal_knowledge_agent/domain tests/unit/test_models.py
@@ -152,23 +152,23 @@ git commit -m "feat: define agent routing contracts"
 - Consumes: `DirectIntent`, `RouteDecision`, `QuestionRouter`, `AnswerService`.
 - Produces: `match_direct_intent(question: str) -> DirectIntent | None`, `render_direct_answer(intent: DirectIntent, question: str) -> str`, and `AgentService.respond(...) -> AgentResponse`.
 
-- [ ] **Step 1: Write failing exact-rule tests**
+- [x] **Step 1: Write failing exact-rule tests**
 
 Parametrize safe inputs (`hi`, `Hello!`, `你好。`, `谢谢`, `what can you do?`, `你能做什么？`) and assert their intents. Parametrize mixed or factual inputs (`你好，请解释 RAG`, `thanks, now search my notes`, `what can you do with RAG?`, `What is RAG?`, blank text) and assert `None`.
 
-- [ ] **Step 2: Verify exact-rule RED**
+- [x] **Step 2: Verify exact-rule RED**
 
 Run `uv run pytest tests/unit/test_direct_intent_rules.py -v`; expect missing-module failure.
 
-- [ ] **Step 3: Implement exact whole-message matching**
+- [x] **Step 3: Implement exact whole-message matching**
 
 Normalize with collapsed whitespace, `casefold()`, and trailing `" .!?。！？,，;；~～"` removal, then use immutable exact-value maps. Do not use substring or prefix matching.
 
-- [ ] **Step 4: Verify exact-rule GREEN**
+- [x] **Step 4: Verify exact-rule GREEN**
 
 Run the targeted rule tests; expect all pass.
 
-- [ ] **Step 5: Write failing AgentService tests**
+- [x] **Step 5: Write failing AgentService tests**
 
 Use small typed fakes to prove:
 
@@ -181,11 +181,11 @@ assert answer_service.calls == []
 
 Also prove English/Chinese templates, retrieval delegation with unchanged `limit` and `mode`, fallback retrieval, blank rejection before router calls, and limit range 1..10.
 
-- [ ] **Step 6: Verify AgentService RED**
+- [x] **Step 6: Verify AgentService RED**
 
 Run `uv run pytest tests/unit/test_agent_service.py -v`; expect missing service failure.
 
-- [ ] **Step 7: Implement the thin service and templates**
+- [x] **Step 7: Implement the thin service and templates**
 
 Use these stable response families:
 
@@ -202,7 +202,7 @@ _DIRECT_ANSWERS = {
 
 Detect Chinese with any character in `\u4e00` through `\u9fff`. Validate the question and limit before calling dependencies. Direct returns a local answer; retrieve delegates to `AnswerService.answer`.
 
-- [ ] **Step 8: Verify AgentService GREEN and commit**
+- [x] **Step 8: Verify AgentService GREEN and commit**
 
 Run both targeted files, Ruff, and mypy; then commit as `feat: add deterministic direct responses`.
 
@@ -217,19 +217,19 @@ Run both targeted files, Ruff, and mypy; then commit as `feat: add deterministic
 **Interfaces:**
 - Produces: `build_route_messages(question: str) -> tuple[ChatMessage, ChatMessage]` and `parse_route_decision(output: ModelOutput) -> RouteDecision`.
 
-- [ ] **Step 1: Write failing prompt tests**
+- [x] **Step 1: Write failing prompt tests**
 
 Assert one system and one user message, the exact two-field JSON contract, the three direct intents, the conservative retrieve categories, and that only the original question—not evidence, database paths, or model settings—appears in the user message. Assert blank input raises `InvalidQueryError`.
 
-- [ ] **Step 2: Verify prompt RED, then implement minimal prompt builder**
+- [x] **Step 2: Verify prompt RED, then implement minimal prompt builder**
 
 The user message format is exactly `QUESTION:\n{question}`. The system policy must explicitly say: direct only for whole-request greeting/capabilities/thanks; otherwise retrieve; output one JSON object without Markdown fences.
 
-- [ ] **Step 3: Verify prompt GREEN**
+- [x] **Step 3: Verify prompt GREEN**
 
 Run `uv run pytest tests/unit/test_route_prompt_builder.py -v`; expect all pass.
 
-- [ ] **Step 4: Write failing parser tests**
+- [x] **Step 4: Write failing parser tests**
 
 Accept only:
 
@@ -240,11 +240,11 @@ Accept only:
 
 with all approved direct intents. Reject invalid JSON, code fences, arrays, missing/extra fields, non-string actions, unknown action/intent, direct with null, retrieve with an intent, and blank values. Every rejection raises `InvalidRouteSchemaError` without echoing the full model response.
 
-- [ ] **Step 5: Verify parser RED, then implement strict parsing**
+- [x] **Step 5: Verify parser RED, then implement strict parsing**
 
 Use `json.loads`, require `type(payload) is dict`, require exactly `{"action", "direct_intent"}`, validate raw Python types, construct enums inside safe `try/except ValueError`, then construct an LLM-sourced `RouteDecision`. Do not strip fences or repair fields.
 
-- [ ] **Step 6: Verify parser GREEN and commit**
+- [x] **Step 6: Verify parser GREEN and commit**
 
 Run both targeted files, Ruff, and mypy; then commit as `feat: add structured route contract`.
 
@@ -258,15 +258,15 @@ Run both targeted files, Ruff, and mypy; then commit as `feat: add structured ro
 - Consumes: `LanguageModel.generate`, `match_direct_intent`, `build_route_messages`, `parse_route_decision`.
 - Produces: `HybridQuestionRouter.route(question: str) -> RouteDecision`.
 
-- [ ] **Step 1: Write failing behavioral tests**
+- [x] **Step 1: Write failing behavioral tests**
 
 Prove exact rules return a rule-sourced direct route with zero model calls; unmatched questions use the model; valid model direct/retrieve decisions are preserved; `LanguageModelError` yields retrieve/provider-error fallback; `InvalidRouteSchemaError` yields retrieve/invalid-output fallback; blank questions fail before model calls; unexpected exceptions propagate.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `uv run pytest tests/unit/test_hybrid_question_router.py -v`; expect missing router failure.
 
-- [ ] **Step 3: Implement minimal hybrid flow**
+- [x] **Step 3: Implement minimal hybrid flow**
 
 ```python
 intent = match_direct_intent(question)
@@ -281,7 +281,7 @@ except InvalidRouteSchemaError:
     return RouteDecision(RouteAction.RETRIEVE, None, RouteSource.FALLBACK, RouterFallbackReason.INVALID_OUTPUT)
 ```
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run the targeted tests, Ruff, and mypy; then commit as `feat: route agent requests conservatively`.
 
@@ -296,23 +296,23 @@ Run the targeted tests, Ruff, and mypy; then commit as `feat: route agent reques
 **Interfaces:**
 - Produces: `ScriptedLanguageModel(results: Sequence[ModelOutput | Exception])`, CLI `_agent(...)`, `_format_route(...)`, and `_print_agent_response(...)`.
 
-- [ ] **Step 1: Write failing sequential-fake tests**
+- [x] **Step 1: Write failing sequential-fake tests**
 
 Assert the fake returns configured results in order, records immutable message tuples, raises configured exceptions, and raises a clear `AssertionError` when exhausted.
 
-- [ ] **Step 2: Verify RED, implement the fake, verify GREEN**
+- [x] **Step 2: Verify RED, implement the fake, verify GREEN**
 
 Keep the fake in tests only. Do not add test-only hooks to production code.
 
-- [ ] **Step 3: Write failing CLI parser and output tests**
+- [x] **Step 3: Write failing CLI parser and output tests**
 
 Cover defaults (`limit=5`, `mode=hybrid`), modes, limits 1 and 10, rejected limits 0 and 11, direct rule output, LLM retrieve plus grounded answer output, invalid-router fallback output plus answer, provider-router fallback output plus answer, missing API key, and absence of traceback/secret/raw provider output.
 
-- [ ] **Step 4: Verify CLI RED**
+- [x] **Step 4: Verify CLI RED**
 
 Run `uv run pytest tests/test_cli.py -v`; expect `agent` parser/dispatch failures.
 
-- [ ] **Step 5: Implement CLI composition and display**
+- [x] **Step 5: Implement CLI composition and display**
 
 Add an `agent` parser mirroring `ask`. Compose one model instance shared by `HybridQuestionRouter` and `AnswerService`. Format routes exactly:
 
@@ -325,7 +325,7 @@ Route: retrieve (fallback: invalid router output)
 
 Then print either the direct text or reuse `_print_answer` unchanged.
 
-- [ ] **Step 6: Verify CLI GREEN and commit**
+- [x] **Step 6: Verify CLI GREEN and commit**
 
 Run CLI tests plus all new unit tests, Ruff, and mypy; commit as `feat: add agent command`.
 
@@ -338,11 +338,11 @@ Run CLI tests plus all new unit tests, Ruff, and mypy; commit as `feat: add agen
 **Interfaces:**
 - Produces: user-facing command documentation and the Phase 2B learning record.
 
-- [ ] **Step 1: Update documentation**
+- [x] **Step 1: Update documentation**
 
 Document that `pka agent` exposes its route, exact greetings can avoid retrieval/model calls, factual and mixed messages retrieve, and router failures fail closed. Explain the two model calls on an LLM-routed factual request and show direct/retrieve examples without secrets.
 
-- [ ] **Step 2: Run targeted regression tests**
+- [x] **Step 2: Run targeted regression tests**
 
 ```bash
 TMPDIR=/tmp UV_PROJECT_ENVIRONMENT=/tmp/pka-phase2b-venv UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest tests/unit/test_models.py tests/unit/test_direct_intent_rules.py tests/unit/test_route_prompt_builder.py tests/unit/test_structured_route_parser.py tests/unit/test_hybrid_question_router.py tests/unit/test_agent_service.py tests/test_cli.py -v
@@ -350,7 +350,7 @@ TMPDIR=/tmp UV_PROJECT_ENVIRONMENT=/tmp/pka-phase2b-venv UV_CACHE_DIR=/tmp/uv-ca
 
 Expected: all pass.
 
-- [ ] **Step 3: Run the complete quality gate**
+- [x] **Step 3: Run the complete quality gate**
 
 ```bash
 TMPDIR=/tmp UV_PROJECT_ENVIRONMENT=/tmp/pka-phase2b-venv UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest
@@ -361,13 +361,13 @@ TMPDIR=/tmp UV_PROJECT_ENVIRONMENT=/tmp/pka-phase2b-venv UV_CACHE_DIR=/tmp/uv-ca
 
 Expected: all tests pass, Ruff reports no changes/errors, and mypy reports success.
 
-- [ ] **Step 4: Commit documentation**
+- [x] **Step 4: Commit documentation**
 
 ```bash
 git add README.md docs/learning-log/phase-2b.md
 git commit -m "docs: explain conservative agent routing"
 ```
 
-- [ ] **Step 5: Review the complete diff**
+- [x] **Step 5: Review the complete diff**
 
 Run `git status --short`, `git diff --check`, and `git log --oneline --decorate -6`. Confirm no `.env`, `.pka/`, provider output, `papers/`, `references/`, or `research/` files are included.
