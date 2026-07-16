@@ -142,10 +142,28 @@ orchestration, SDK translation and safe errors, environment settings, local refu
 and successful cited output. They use deterministic fakes and do not require an API
 key or network access.
 
-The separate real DeepSeek smoke test is intentionally performed only with explicit
-approval because it sends the public test fixture to a remote service and can incur
-cost. Its observed model ID, citation result, and latency belong here after that
-approved run.
+## Real DeepSeek smoke test
+
+After explicit approval, the real workflow ingested only the public
+`tests/fixtures/knowledge/rag_notes.md` fixture into a temporary database and asked:
+`RAG 为什么能减少模型脱离资料的猜测？`
+
+The configured endpoint reported model ID `deepseek-v4-flash` and finish reason
+`stop`. The provider returned a valid three-field JSON object, the local parser
+accepted its schema and citation semantics, and the answer used `[S1]`. The CLI
+mapped that label back to the fixture's `Retrieval-Augmented Generation >
+检索增强生成` heading. No private document was used.
+
+The end-to-end `ask` process took 22.85 seconds. This measurement includes loading
+the cached E5 embedding model in a new CLI process, query embedding, retrieval, the
+remote request, validation, and formatting, so it is not a provider-only latency
+measurement. The separate-process E5 reload remains an important CLI performance
+limitation.
+
+The run displayed Hugging Face's unauthenticated-download warning while loading the
+public embedding model from its cache. This did not affect the DeepSeek result. The
+temporary smoke database was removed afterward, and the API key, complete prompt,
+raw provider response, and reasoning content were not recorded.
 
 ## Commands I can explain
 
