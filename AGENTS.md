@@ -51,7 +51,6 @@ gate before a feature is merged.
 - Keep task-level implementation plans in `docs/superpowers/plans/`.
 - Update the relevant learning log when a phase produces a new concept worth
   explaining for an AI Engineer portfolio.
-- Update `TODO.md` when a planned milestone starts or completes.
 
 ## Git and workspace safety
 
@@ -67,7 +66,7 @@ gate before a feature is merged.
 
 - Phase 1A is complete: Markdown ingestion, heading-aware chunks, mixed
   Chinese/English tokenization, SQLite persistence, and BM25 retrieval.
-- Phase 1B is in progress: local `multilingual-e5-small` embeddings, exact
-  cosine retrieval, and RRF hybrid ranking.
+- Phase 1B is complete: local `multilingual-e5-small` embeddings, exact cosine
+  retrieval, and RRF hybrid ranking.
 - PDF/web/code ingestion, LLM answer generation, agent routing, memory,
   knowledge graphs, evaluation, and deployment are future phases.
