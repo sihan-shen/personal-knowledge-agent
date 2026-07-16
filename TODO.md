@@ -8,8 +8,8 @@ steps belong in `docs/superpowers/`.
 - [x] Approve the local, CPU-friendly `intfloat/multilingual-e5-small` model.
 - [x] Approve and commit the Phase 1B architecture and implementation plan.
 - [x] Define `Embedding`, `SearchMode`, `EmbeddingModel`, and related tests.
-- [ ] Add the lazy E5 adapter with `passage:` and `query:` prefixes.
-- [ ] Add deterministic fake-embedder tests without model downloads.
+- [x] Add the lazy E5 adapter with `passage:` and `query:` prefixes.
+- [x] Add deterministic fake-embedder tests without model downloads.
 - [ ] Migrate SQLite from schema v1 to v2 and persist float32 embeddings.
 - [ ] Guarantee re-ingestion atomically replaces postings and vectors together.
 - [ ] Implement exact cosine semantic retrieval.
