@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from hashlib import sha256
+from math import isfinite
 
 
 def make_document_id(source: str) -> str:
@@ -20,6 +22,14 @@ def make_chunk_id(document_id: str, position: int) -> str:
 def _require_text(value: str, field_name: str) -> None:
     if not value.strip():
         raise ValueError(f"{field_name} must not be blank")
+
+
+class SearchMode(StrEnum):
+    """Supported strategies for ranking knowledge chunks."""
+
+    LEXICAL = "lexical"
+    SEMANTIC = "semantic"
+    HYBRID = "hybrid"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +70,21 @@ class SearchResult:
     chunk: Chunk
     source: str
     score: float
+
+
+@dataclass(frozen=True, slots=True)
+class Embedding:
+    """A finite vector produced by one named embedding model."""
+
+    model_id: str
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.model_id, "model_id")
+        if not self.values:
+            raise ValueError("values must not be empty")
+        if not all(isfinite(value) for value in self.values):
+            raise ValueError("values must be finite")
 
 
 @dataclass(frozen=True, slots=True)

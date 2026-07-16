@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from personal_knowledge_agent.domain.errors import InvalidQueryError
-from personal_knowledge_agent.domain.models import SearchResult
+from personal_knowledge_agent.domain.models import SearchMode, SearchResult
 from personal_knowledge_agent.domain.protocols import KnowledgeIndex
 
 
@@ -13,8 +13,18 @@ class SearchService:
     def __init__(self, index: KnowledgeIndex) -> None:
         self._index = index
 
-    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.HYBRID,
+    ) -> list[SearchResult]:
         """Return ranked chunks within the supported result limit."""
         if not 1 <= limit <= 20:
             raise InvalidQueryError("Search limit must be between 1 and 20")
-        return self._index.search(query, limit=limit)
+        try:
+            selected_mode = SearchMode(mode)
+        except ValueError as error:
+            raise InvalidQueryError(f"Unsupported search mode: {mode}") from error
+        return self._index.search(query, limit=limit, mode=selected_mode)

@@ -10,7 +10,8 @@ from pathlib import Path
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import KnowledgeError
-from personal_knowledge_agent.domain.models import SearchResult
+from personal_knowledge_agent.domain.models import SearchMode, SearchResult
+from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
@@ -50,12 +51,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search_parser.add_argument("query")
     search_parser.add_argument("--limit", type=_search_limit, default=5)
+    search_parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in SearchMode],
+        default=SearchMode.HYBRID.value,
+    )
     search_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
     return parser
 
 
 def _ingest(path: Path, database: Path) -> None:
-    index = SQLiteKeywordIndex(database)
+    index = SQLiteKeywordIndex(database, E5Embedder())
     service = IngestService(MarkdownLoader(), MarkdownChunker(), index)
     result = service.ingest(path)
     action = "Reindexed" if result.replaced else "Indexed"
@@ -79,8 +85,10 @@ def _format_result(position: int, result: SearchResult) -> str:
     )
 
 
-def _search(query: str, limit: int, database: Path) -> None:
-    results = SearchService(SQLiteKeywordIndex(database)).search(query, limit=limit)
+def _search(query: str, limit: int, mode: SearchMode, database: Path) -> None:
+    index = SQLiteKeywordIndex(database, E5Embedder())
+    results = SearchService(index).search(query, limit=limit, mode=mode)
+    print(f"Search mode: {mode.value}")
     if not results:
         print("No relevant chunks found.")
         return
@@ -99,7 +107,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
         elif parsed.command == "ingest":
             _ingest(parsed.path, parsed.db)
         elif parsed.command == "search":
-            _search(parsed.query, parsed.limit, parsed.db)
+            _search(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
     except KnowledgeError as error:
         parser.exit(1, f"error: {error}\n")
 

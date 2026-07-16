@@ -1,20 +1,50 @@
-"""Black-box tests for the command-line interface."""
+"""Behavioral tests for the command-line interface."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
+
+from personal_knowledge_agent.cli import main
+from tests.helpers import FakeEmbedder
 
 
-def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
-    """Run the package module as a user would invoke the CLI."""
-    return subprocess.run(
-        [sys.executable, "-m", "personal_knowledge_agent.cli", *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
+@dataclass(frozen=True)
+class CliResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_cli(*arguments: str) -> CliResult:
+    """Run the CLI with deterministic embeddings and capture its process contract."""
+    stdout = StringIO()
+    stderr = StringIO()
+    returncode = 0
+    embedder = FakeEmbedder(
+        {
+            "RAG 检索 evidence": (1.0, 0.0),
+            "gardening": (0.0, 1.0),
+            "rag": (1.0, 0.0),
+        },
+        default_vector=(1.0, 0.0),
     )
+    with (
+        patch(
+            "personal_knowledge_agent.cli.E5Embedder",
+            return_value=embedder,
+        ),
+        redirect_stdout(stdout),
+        redirect_stderr(stderr),
+    ):
+        try:
+            main(arguments)
+        except SystemExit as error:
+            returncode = int(error.code or 0)
+    return CliResult(returncode, stdout.getvalue(), stderr.getvalue())
 
 
 def test_health_command_reports_healthy_project() -> None:
@@ -50,6 +80,7 @@ def test_ingest_and_search_persist_across_processes(tmp_path: Path) -> None:
     assert ingested.returncode == 0
     assert "Indexed 1 chunks" in ingested.stdout
     assert searched.returncode == 0
+    assert "Search mode: hybrid" in searched.stdout
     assert "[score=" in searched.stdout
     assert str(document.resolve()) in searched.stdout
     assert "RAG > Retrieval" in searched.stdout
@@ -77,7 +108,10 @@ def test_search_reports_no_matches_as_success(tmp_path: Path) -> None:
     result = run_cli("search", "gardening", "--db", str(database))
 
     assert result.returncode == 0
-    assert result.stdout.strip() == "No relevant chunks found."
+    assert result.stdout.splitlines() == [
+        "Search mode: hybrid",
+        "No relevant chunks found.",
+    ]
 
 
 def test_search_empty_database_returns_operational_error(tmp_path: Path) -> None:
@@ -117,3 +151,32 @@ def test_search_rejects_limit_outside_cli_range(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "between 1 and 20" in result.stderr
+
+
+def test_search_rejects_unknown_mode() -> None:
+    result = run_cli("search", "rag", "--mode", "vector")
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+    assert "lexical" in result.stderr
+    assert "semantic" in result.stderr
+    assert "hybrid" in result.stderr
+
+
+def test_search_reports_explicit_mode(tmp_path: Path) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+
+    result = run_cli(
+        "search",
+        "rag",
+        "--mode",
+        "semantic",
+        "--db",
+        str(database),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.startswith("Search mode: semantic\n")

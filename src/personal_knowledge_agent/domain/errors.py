@@ -27,3 +27,7 @@ class KnowledgeBaseEmptyError(KnowledgeError):
 
 class IndexStorageError(KnowledgeError):
     """Raised when the persistent index cannot be used."""
+
+
+class EmbeddingError(KnowledgeError):
+    """Raised when local embedding generation or validation fails."""

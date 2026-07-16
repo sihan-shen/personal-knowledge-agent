@@ -4,24 +4,36 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import struct
 from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
 from hashlib import sha256
-from math import log
+from math import fsum, log
 from pathlib import Path
 
 from personal_knowledge_agent.domain.errors import (
+    EmbeddingError,
     IndexStorageError,
     InvalidQueryError,
     KnowledgeBaseEmptyError,
 )
-from personal_knowledge_agent.domain.models import Chunk, Document, SearchResult
+from personal_knowledge_agent.domain.models import (
+    Chunk,
+    Document,
+    Embedding,
+    SearchMode,
+    SearchResult,
+)
+from personal_knowledge_agent.domain.protocols import EmbeddingModel
 from personal_knowledge_agent.infrastructure.mixed_tokenizer import (
     MixedLanguageTokenizer,
 )
+from personal_knowledge_agent.infrastructure.retrieval_fusion import (
+    reciprocal_rank_fusion,
+)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _BM25_K1 = 1.5
 _BM25_B = 0.75
 _SCHEMA = """
@@ -51,7 +63,50 @@ CREATE TABLE postings (
 );
 
 CREATE INDEX idx_postings_token ON postings(token);
+
+CREATE TABLE embeddings (
+    chunk_id TEXT PRIMARY KEY
+        REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
+
+CREATE INDEX idx_embeddings_model_id ON embeddings(model_id);
 """
+
+_EMBEDDINGS_SCHEMA = """
+CREATE TABLE embeddings (
+    chunk_id TEXT PRIMARY KEY
+        REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
+
+CREATE INDEX idx_embeddings_model_id ON embeddings(model_id);
+"""
+
+
+def _pack_vector(values: Sequence[float]) -> bytes:
+    try:
+        return struct.pack(f"<{len(values)}f", *values)
+    except (OverflowError, struct.error) as error:
+        raise EmbeddingError("Embedding values cannot be stored as float32") from error
+
+
+def _unpack_vector(value: bytes, *, dimensions: int) -> tuple[float, ...]:
+    if dimensions <= 0:
+        raise IndexStorageError("Stored embedding dimension must be positive")
+    expected_length = dimensions * 4
+    if len(value) != expected_length:
+        raise IndexStorageError(
+            "Stored embedding byte length does not match its dimension"
+        )
+    try:
+        return tuple(struct.unpack(f"<{dimensions}f", value))
+    except struct.error as error:
+        raise IndexStorageError("Stored embedding vector is invalid") from error
 
 
 class SQLiteKeywordIndex:
@@ -60,9 +115,11 @@ class SQLiteKeywordIndex:
     def __init__(
         self,
         database_path: Path,
+        embedding_model: EmbeddingModel,
         tokenizer: MixedLanguageTokenizer | None = None,
     ) -> None:
         self._database_path = database_path.expanduser().resolve()
+        self._embedding_model = embedding_model
         self._tokenizer = tokenizer or MixedLanguageTokenizer()
         try:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +140,8 @@ class SQLiteKeywordIndex:
                 raise IndexStorageError(
                     f"Chunk {chunk.chunk_id} belongs to a different document"
                 )
+
+        embeddings = self._prepare_embeddings(chunks)
 
         with closing(self._open()) as connection:
             try:
@@ -111,8 +170,9 @@ class SQLiteKeywordIndex:
                         sha256(document.content.encode("utf-8")).hexdigest(),
                     ),
                 )
-                for chunk in chunks:
+                for chunk, embedding in zip(chunks, embeddings, strict=True):
                     self._insert_chunk(connection, chunk)
+                    self._insert_embedding(connection, chunk.chunk_id, embedding)
                 connection.commit()
             except sqlite3.Error as error:
                 connection.rollback()
@@ -122,11 +182,21 @@ class SQLiteKeywordIndex:
 
         return existed
 
-    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
-        """Return positive-scoring chunks ordered by BM25 relevance."""
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.LEXICAL,
+    ) -> list[SearchResult]:
+        """Return chunks ordered by the selected retrieval strategy."""
         query_tokens = list(dict.fromkeys(self._tokenizer.tokenize(query)))
         if not query_tokens:
             raise InvalidQueryError("Query contains no searchable terms")
+        try:
+            selected_mode = SearchMode(mode)
+        except ValueError as error:
+            raise InvalidQueryError(f"Unsupported search mode: {mode}") from error
 
         with closing(self._open()) as connection:
             try:
@@ -140,15 +210,36 @@ class SQLiteKeywordIndex:
                         "Knowledge base is empty. Ingest a document first."
                     )
 
-                rows = self._matching_postings(connection, query_tokens)
-                if not rows:
-                    return []
-                return self._rank_rows(
-                    rows,
-                    chunk_count=chunk_count,
-                    average_length=average_length,
-                    limit=limit,
-                )
+                if selected_mode is SearchMode.LEXICAL:
+                    return self._lexical_search(
+                        connection,
+                        query_tokens,
+                        chunk_count=chunk_count,
+                        average_length=average_length,
+                        limit=limit,
+                    )
+                if selected_mode is SearchMode.SEMANTIC:
+                    return self._semantic_search(connection, query, limit=limit)
+                if selected_mode is SearchMode.HYBRID:
+                    candidate_limit = max(20, limit * 4)
+                    lexical = self._lexical_search(
+                        connection,
+                        query_tokens,
+                        chunk_count=chunk_count,
+                        average_length=average_length,
+                        limit=candidate_limit,
+                    )
+                    semantic = self._semantic_search(
+                        connection,
+                        query,
+                        limit=candidate_limit,
+                    )
+                    return reciprocal_rank_fusion(
+                        lexical,
+                        semantic,
+                        limit=limit,
+                    )
+                raise InvalidQueryError(f"Unsupported search mode: {selected_mode}")
             except (
                 sqlite3.Error,
                 json.JSONDecodeError,
@@ -158,6 +249,105 @@ class SQLiteKeywordIndex:
                 raise IndexStorageError(
                     f"Could not search knowledge index: {self._database_path}"
                 ) from error
+
+    def _lexical_search(
+        self,
+        connection: sqlite3.Connection,
+        query_tokens: list[str],
+        *,
+        chunk_count: int,
+        average_length: float,
+        limit: int,
+    ) -> list[SearchResult]:
+        rows = self._matching_postings(connection, query_tokens)
+        if not rows:
+            return []
+        return self._rank_rows(
+            rows,
+            chunk_count=chunk_count,
+            average_length=average_length,
+            limit=limit,
+        )
+
+    def _semantic_search(
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[SearchResult]:
+        query_embedding = self._embedding_model.embed_query(query)
+        if query_embedding.model_id != self._embedding_model.model_id:
+            raise EmbeddingError(
+                "Query embedding model identifier does not match configured model"
+            )
+
+        rows = connection.execute(
+            """
+            SELECT
+                e.model_id,
+                e.dimensions,
+                e.vector,
+                c.chunk_id,
+                c.document_id,
+                c.position,
+                c.text,
+                c.heading_path,
+                d.source
+            FROM embeddings AS e
+            JOIN chunks AS c ON c.chunk_id = e.chunk_id
+            JOIN documents AS d ON d.document_id = c.document_id
+            """
+        ).fetchall()
+
+        ranked: list[SearchResult] = []
+        for row in rows:
+            stored_model = str(row["model_id"])
+            if stored_model != self._embedding_model.model_id:
+                raise IndexStorageError(
+                    "Re-ingest the knowledge base: stored embedding model "
+                    f"{stored_model} does not match {self._embedding_model.model_id}"
+                )
+            dimensions = int(row["dimensions"])
+            if dimensions != len(query_embedding.values):
+                raise IndexStorageError(
+                    "Re-ingest the knowledge base: stored embedding dimension "
+                    f"{dimensions} does not match query dimension "
+                    f"{len(query_embedding.values)}"
+                )
+            vector_value = row["vector"]
+            if not isinstance(vector_value, (bytes, bytearray, memoryview)):
+                raise IndexStorageError("Stored embedding vector is not a BLOB")
+            vector = _unpack_vector(bytes(vector_value), dimensions=dimensions)
+            score = fsum(
+                query_value * stored_value
+                for query_value, stored_value in zip(
+                    query_embedding.values,
+                    vector,
+                    strict=True,
+                )
+            )
+            if score > 0:
+                ranked.append(self._semantic_result(row, score))
+
+        ranked.sort(key=lambda result: (-result.score, result.chunk.chunk_id))
+        return ranked[:limit]
+
+    @staticmethod
+    def _semantic_result(row: sqlite3.Row, score: float) -> SearchResult:
+        heading_value = json.loads(str(row["heading_path"]))
+        if not isinstance(heading_value, list) or not all(
+            isinstance(item, str) for item in heading_value
+        ):
+            raise ValueError("Stored heading_path is not a string list")
+        chunk = Chunk(
+            chunk_id=str(row["chunk_id"]),
+            document_id=str(row["document_id"]),
+            position=int(row["position"]),
+            text=str(row["text"]),
+            heading_path=tuple(heading_value),
+        )
+        return SearchResult(chunk=chunk, source=str(row["source"]), score=score)
 
     @staticmethod
     def _matching_postings(
@@ -243,7 +433,7 @@ class SQLiteKeywordIndex:
         connection: sqlite3.Connection,
         chunk: Chunk,
     ) -> None:
-        searchable_text = f"{' '.join(chunk.heading_path)}\n{chunk.text}"
+        searchable_text = self._searchable_text(chunk)
         frequencies = Counter(self._tokenizer.tokenize(searchable_text))
         connection.execute(
             """
@@ -268,6 +458,50 @@ class SQLiteKeywordIndex:
             ),
         )
 
+    def _prepare_embeddings(self, chunks: Sequence[Chunk]) -> list[Embedding]:
+        texts = [self._searchable_text(chunk) for chunk in chunks]
+        embeddings = self._embedding_model.embed_documents(texts)
+        if len(embeddings) != len(chunks):
+            raise EmbeddingError(
+                f"Embedding model returned {len(embeddings)} vectors for "
+                f"{len(chunks)} chunks"
+            )
+
+        dimensions: set[int] = set()
+        for embedding in embeddings:
+            if embedding.model_id != self._embedding_model.model_id:
+                raise EmbeddingError(
+                    "Embedding model identifier does not match configured model"
+                )
+            dimensions.add(len(embedding.values))
+            _pack_vector(embedding.values)
+        if len(dimensions) > 1:
+            raise EmbeddingError("Chunk embeddings must have one common dimension")
+        return embeddings
+
+    @staticmethod
+    def _searchable_text(chunk: Chunk) -> str:
+        return f"{' '.join(chunk.heading_path)}\n{chunk.text}"
+
+    @staticmethod
+    def _insert_embedding(
+        connection: sqlite3.Connection,
+        chunk_id: str,
+        embedding: Embedding,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO embeddings(chunk_id, model_id, dimensions, vector)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                chunk_id,
+                embedding.model_id,
+                len(embedding.values),
+                _pack_vector(embedding.values),
+            ),
+        )
+
     def _initialize_schema(self) -> None:
         with closing(self._open()) as connection:
             try:
@@ -275,6 +509,10 @@ class SQLiteKeywordIndex:
                 version = int(row[0]) if row is not None else 0
                 if version == 0:
                     connection.executescript(_SCHEMA)
+                    connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+                    connection.commit()
+                elif version == 1:
+                    connection.executescript(_EMBEDDINGS_SCHEMA)
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
                     connection.commit()
                 elif version != _SCHEMA_VERSION:
