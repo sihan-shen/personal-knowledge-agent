@@ -8,17 +8,25 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import KnowledgeError
 from personal_knowledge_agent.domain.models import (
+    AgentResponse,
     AnswerStatus,
     GroundedAnswer,
+    RouteAction,
+    RouteDecision,
+    RouterFallbackReason,
     SearchMode,
     SearchResult,
 )
 from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
+from personal_knowledge_agent.infrastructure.hybrid_question_router import (
+    HybridQuestionRouter,
+)
 from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
@@ -91,6 +99,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=SearchMode.HYBRID.value,
     )
     ask_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Choose whether to answer directly or retrieve grounded evidence.",
+    )
+    agent_parser.add_argument("query")
+    agent_parser.add_argument("--limit", type=_answer_limit, default=5)
+    agent_parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in SearchMode],
+        default=SearchMode.HYBRID.value,
+    )
+    agent_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
     return parser
 
 
@@ -166,6 +187,47 @@ def _ask(query: str, limit: int, mode: SearchMode, database: Path) -> None:
     _print_answer(answer)
 
 
+def _format_route(decision: RouteDecision) -> str:
+    if decision.source.value == "fallback":
+        labels = {
+            RouterFallbackReason.PROVIDER_ERROR: "provider error",
+            RouterFallbackReason.INVALID_OUTPUT: "invalid router output",
+        }
+        assert decision.fallback_reason is not None
+        return f"Route: retrieve (fallback: {labels[decision.fallback_reason]})"
+    if decision.action is RouteAction.DIRECT:
+        assert decision.direct_intent is not None
+        return (
+            f"Route: direct ({decision.direct_intent.value}, {decision.source.value})"
+        )
+    return f"Route: retrieve ({decision.source.value})"
+
+
+def _print_agent_response(response: AgentResponse) -> None:
+    print(_format_route(response.route))
+    if response.direct_answer is not None:
+        print(response.direct_answer)
+        return
+    assert response.grounded_answer is not None
+    _print_answer(response.grounded_answer)
+
+
+def _agent(query: str, limit: int, mode: SearchMode, database: Path) -> None:
+    settings = load_llm_settings(os.environ)
+    index = SQLiteKeywordIndex(database, E5Embedder())
+    language_model = OpenAICompatibleChatModel(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        model_id=settings.model_id,
+    )
+    answer_service = AnswerService(SearchService(index), language_model)
+    response = AgentService(
+        HybridQuestionRouter(language_model),
+        answer_service,
+    ).respond(query, limit=limit, mode=mode)
+    _print_agent_response(response)
+
+
 def main(arguments: Sequence[str] | None = None) -> None:
     """Run the CLI and print the result of the requested command."""
     parser = build_parser()
@@ -180,6 +242,8 @@ def main(arguments: Sequence[str] | None = None) -> None:
             _search(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
         elif parsed.command == "ask":
             _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
+        elif parsed.command == "agent":
+            _agent(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
     except KnowledgeError as error:
         parser.exit(1, f"error: {error}\n")
 

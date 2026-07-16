@@ -14,7 +14,8 @@ import pytest
 from personal_knowledge_agent.cli import build_parser, main
 from personal_knowledge_agent.domain.errors import LanguageModelError
 from personal_knowledge_agent.domain.models import ModelOutput
-from tests.helpers import FakeEmbedder, FakeLanguageModel
+from personal_knowledge_agent.domain.protocols import LanguageModel
+from tests.helpers import FakeEmbedder, FakeLanguageModel, ScriptedLanguageModel
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class CliResult:
 
 def run_cli(
     *arguments: str,
-    language_model: FakeLanguageModel | None = None,
+    language_model: LanguageModel | None = None,
     environment: dict[str, str] | None = None,
 ) -> CliResult:
     """Run the CLI with deterministic embeddings and capture its process contract."""
@@ -335,6 +336,153 @@ def test_ask_rejects_unknown_mode() -> None:
 
     assert result.returncode == 2
     assert "invalid choice" in result.stderr
+
+
+def test_agent_parser_uses_safe_defaults() -> None:
+    parsed = build_parser().parse_args(["agent", "question"])
+
+    assert parsed.limit == 5
+    assert parsed.mode == "hybrid"
+
+
+@pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
+def test_agent_parser_accepts_each_search_mode(mode: str) -> None:
+    parsed = build_parser().parse_args(["agent", "question", "--mode", mode])
+
+    assert parsed.mode == mode
+
+
+@pytest.mark.parametrize("limit", ["1", "10"])
+def test_agent_parser_accepts_cost_boundary(limit: str) -> None:
+    parsed = build_parser().parse_args(["agent", "question", "--limit", limit])
+
+    assert parsed.limit == int(limit)
+
+
+@pytest.mark.parametrize("limit", ["0", "11"])
+def test_agent_rejects_limit_outside_cost_boundary(limit: str) -> None:
+    result = run_cli("agent", "question", "--limit", limit)
+
+    assert result.returncode == 2
+    assert "between 1 and 10" in result.stderr
+
+
+def test_agent_direct_rule_displays_visible_route_without_model_call(
+    tmp_path: Path,
+) -> None:
+    model = FakeLanguageModel(RuntimeError("must not be called"))
+
+    result = run_cli(
+        "agent",
+        "你好",
+        "--db",
+        str(tmp_path / "knowledge.db"),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: direct (greeting, rule)\n"
+        "你好。我可以在需要时检索你的本地知识库，并用引用回答问题。\n"
+    )
+    assert model.calls == []
+
+
+def test_agent_llm_retrieve_displays_route_then_grounded_answer(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How does RAG work?",
+        "--db",
+        str(database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
+    assert "\nSources:\n[S1] " in result.stdout
+    assert len(model.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("router_result", "route_line"),
+    [
+        (
+            ModelOutput("router", "not JSON", "stop"),
+            "Route: retrieve (fallback: invalid router output)\n",
+        ),
+        (
+            LanguageModelError("provider-body-secret-123"),
+            "Route: retrieve (fallback: provider error)\n",
+        ),
+    ],
+)
+def test_agent_router_failure_displays_safe_fallback_and_retrieves(
+    tmp_path: Path,
+    router_result: ModelOutput | Exception,
+    route_line: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [
+            router_result,
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How does RAG work?",
+        "--db",
+        str(database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.startswith(route_line + "Answer:\nGrounded. [S1]\n")
+    assert "provider-body-secret-123" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_agent_requires_api_key_without_exposing_traceback(tmp_path: Path) -> None:
+    result = run_cli(
+        "agent",
+        "hello",
+        "--db",
+        str(tmp_path / "knowledge.db"),
+        environment={},
+    )
+
+    assert result.returncode == 1
+    assert "PKA_LLM_API_KEY" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 @pytest.mark.parametrize(
