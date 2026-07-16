@@ -68,5 +68,8 @@ gate before a feature is merged.
   Chinese/English tokenization, SQLite persistence, and BM25 retrieval.
 - Phase 1B is complete: local `multilingual-e5-small` embeddings, exact cosine
   retrieval, and RRF hybrid ranking.
-- PDF/web/code ingestion, LLM answer generation, agent routing, memory,
-  knowledge graphs, evaluation, and deployment are future phases.
+- Phase 2A is complete: provider-neutral grounded-answer contracts, an
+  OpenAI-compatible Chat Completions adapter, strict JSON/citation validation, and
+  the `pka ask` composition root.
+- PDF/web/code ingestion, agent routing, memory, knowledge graphs, evaluation, and
+  deployment are future phases.
