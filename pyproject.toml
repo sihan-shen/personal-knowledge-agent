@@ -9,6 +9,7 @@ description = "A personal knowledge management system built with RAG and Agent p
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "openai>=2.0.0",
     "sentence-transformers>=5.0.0",
     "torch>=2.0.0",
 ]
