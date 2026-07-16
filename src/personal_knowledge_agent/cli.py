@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import KnowledgeError
-from personal_knowledge_agent.domain.models import SearchMode, SearchResult
+from personal_knowledge_agent.domain.models import (
+    AnswerStatus,
+    GroundedAnswer,
+    SearchMode,
+    SearchResult,
+)
 from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
+from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import (
+    OpenAICompatibleChatModel,
+)
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
     SQLiteKeywordIndex,
 )
@@ -29,6 +40,16 @@ def _search_limit(value: str) -> int:
         raise argparse.ArgumentTypeError("limit must be an integer") from error
     if not 1 <= limit <= 20:
         raise argparse.ArgumentTypeError("limit must be between 1 and 20")
+    return limit
+
+
+def _answer_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("limit must be an integer") from error
+    if not 1 <= limit <= 10:
+        raise argparse.ArgumentTypeError("limit must be between 1 and 10")
     return limit
 
 
@@ -57,6 +78,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=SearchMode.HYBRID.value,
     )
     search_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Answer a question using evidence from the knowledge base.",
+    )
+    ask_parser.add_argument("query")
+    ask_parser.add_argument("--limit", type=_answer_limit, default=5)
+    ask_parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in SearchMode],
+        default=SearchMode.HYBRID.value,
+    )
+    ask_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
     return parser
 
 
@@ -96,6 +130,42 @@ def _search(query: str, limit: int, mode: SearchMode, database: Path) -> None:
         print(_format_result(position, result))
 
 
+def _format_evidence_source(answer: GroundedAnswer, citation_id: str) -> str:
+    evidence = next(item for item in answer.evidence if item.citation_id == citation_id)
+    if not evidence.heading_path:
+        return evidence.source
+    return f"{evidence.source} > {' > '.join(evidence.heading_path)}"
+
+
+def _print_answer(answer: GroundedAnswer) -> None:
+    if answer.status is AnswerStatus.INSUFFICIENT_EVIDENCE:
+        print("Insufficient evidence:")
+        print(answer.answer)
+        return
+
+    print("Answer:")
+    print(answer.answer)
+    print("\nSources:")
+    for citation_id in answer.citation_ids:
+        print(f"[{citation_id}] {_format_evidence_source(answer, citation_id)}")
+
+
+def _ask(query: str, limit: int, mode: SearchMode, database: Path) -> None:
+    settings = load_llm_settings(os.environ)
+    index = SQLiteKeywordIndex(database, E5Embedder())
+    language_model = OpenAICompatibleChatModel(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        model_id=settings.model_id,
+    )
+    answer = AnswerService(SearchService(index), language_model).answer(
+        query,
+        limit=limit,
+        mode=mode,
+    )
+    _print_answer(answer)
+
+
 def main(arguments: Sequence[str] | None = None) -> None:
     """Run the CLI and print the result of the requested command."""
     parser = build_parser()
@@ -108,6 +178,8 @@ def main(arguments: Sequence[str] | None = None) -> None:
             _ingest(parsed.path, parsed.db)
         elif parsed.command == "search":
             _search(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
+        elif parsed.command == "ask":
+            _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
     except KnowledgeError as error:
         parser.exit(1, f"error: {error}\n")
 

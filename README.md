@@ -4,10 +4,12 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 1B provides persistent Markdown ingestion plus Chinese/English lexical,
-semantic, and hybrid retrieval. Embeddings run locally on CPU and are stored in
-SQLite alongside the BM25 index. The project does not yet call an LLM or generate
-answers.
+Phase 2A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+and hybrid retrieval, plus evidence-grounded answers through an OpenAI-compatible
+Chat Completions endpoint. Embeddings run locally on CPU and are stored in SQLite
+alongside the BM25 index. Answer generation is deliberately not an Agent yet:
+`pka ask` always retrieves, while later routing will decide whether retrieval or a
+different tool is needed.
 
 ## Prerequisites
 
@@ -51,6 +53,21 @@ These exports are already configured in `~/.bashrc`. Open a new shell or run
 ```bash
 uv run pka health
 ```
+
+## Configure answer generation
+
+`pka ask` requires an API key in the shell. The defaults target DeepSeek's
+OpenAI-compatible endpoint and the `deepseek-v4-flash` model:
+
+```bash
+export PKA_LLM_API_KEY="your-key"
+export PKA_LLM_BASE_URL="https://api.deepseek.com"  # optional
+export PKA_LLM_MODEL="deepseek-v4-flash"            # optional
+```
+
+`.env.example` documents these names, but the CLI does not automatically load a
+`.env` file. Never commit the real key. The endpoint and model are configurable so
+the application service remains independent of one provider.
 
 ## Build a local knowledge base
 
@@ -97,6 +114,47 @@ database is migrated automatically, but its existing documents must be reingeste
 before semantic retrieval can search them. Search output labels the mode and
 contains retrieval scores, source paths, heading paths, and text snippets. It
 returns evidence chunks rather than an LLM-written answer.
+
+## Ask an evidence-grounded question
+
+After ingesting a document, ask a question against the same database:
+
+```bash
+uv run pka ask \
+  "RAG 为什么能减少模型脱离资料的猜测？" \
+  --mode hybrid \
+  --limit 5 \
+  --db data/knowledge.db
+```
+
+`ask` defaults to hybrid retrieval and five evidence chunks. Its evidence limit is
+1 to 10, a smaller boundary than `search` because every selected chunk consumes
+remote-model context and can add API cost. An accepted answer contains inline
+citations such as `[S1]` and a `Sources` section mapping only those cited labels
+back to local paths and heading paths. If retrieval returns nothing, the CLI refuses
+locally without calling the model. The model can also declare that the retrieved
+evidence is insufficient; this produces no `Sources` section.
+
+The provider receives the question plus each selected chunk's request-local citation
+ID, heading path, and text. Absolute source paths, stable chunk IDs, retrieval scores,
+the API key, and the embedding vectors remain local. Retrieved text can still be
+private, so configure only a provider you trust and understand its data policy before
+using `ask`.
+
+The adapter requests one non-streaming JSON object through Chat Completions. JSON
+mode only helps the provider produce syntactically valid JSON; the project still
+validates the exact fields, answer status, citation IDs, body citation order, and
+membership in the supplied evidence. It does not repair malformed responses.
+Retrieved documents are serialized as untrusted evidence data and the system prompt
+tells the model not to follow instructions inside them. That boundary, data
+minimization, and local citation validation are defence in depth, not a mathematical
+guarantee against prompt injection.
+
+The SDK may retry transient failures up to two times, so one CLI command can make
+more than one billable request. Authentication, permission, bad-request, rate-limit,
+timeout, connection, server, truncation, schema, and citation failures become concise
+CLI errors without echoing provider payloads. Automated tests use deterministic
+fakes and never call DeepSeek or incur API cost.
 
 ## Quality checks
 

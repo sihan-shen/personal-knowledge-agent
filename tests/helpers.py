@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from math import fsum, isfinite, sqrt
 
 from personal_knowledge_agent.domain.errors import EmbeddingError
-from personal_knowledge_agent.domain.models import Embedding
+from personal_knowledge_agent.domain.models import ChatMessage, Embedding, ModelOutput
 
 
 class FakeEmbedder:
@@ -56,3 +56,17 @@ class FakeEmbedder:
             self.model_id,
             tuple(value / magnitude for value in values),
         )
+
+
+class FakeLanguageModel:
+    """Return one configured output or failure and record immutable calls."""
+
+    def __init__(self, result: ModelOutput | Exception) -> None:
+        self._result = result
+        self.calls: list[tuple[ChatMessage, ...]] = []
+
+    def generate(self, messages: Sequence[ChatMessage]) -> ModelOutput:
+        self.calls.append(tuple(messages))
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
