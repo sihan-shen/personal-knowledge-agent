@@ -19,6 +19,26 @@ vector database.
 uv sync --all-groups
 ```
 
+### WSL environment
+
+This repository's current WSL location is:
+
+```bash
+/mnt/c/Users/19850/Projects/RAG-Agent
+```
+
+Run project commands from that directory (not the previous native-Linux path
+under `/home/sihan/文档/...`). On this Windows-mounted filesystem, keep Python
+temporary files in WSL's Linux filesystem and ask uv to copy cached packages:
+
+```bash
+export TMPDIR=/tmp
+export UV_LINK_MODE=copy
+```
+
+These exports are already configured in `~/.bashrc`. Open a new shell or run
+`source ~/.bashrc` after changing that file.
+
 ## Health check
 
 ```bash
