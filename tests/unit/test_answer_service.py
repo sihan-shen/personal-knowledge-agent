@@ -149,8 +149,7 @@ def test_non_empty_retrieval_builds_prompt_and_returns_validated_answer() -> Non
         (
             ModelOutput(
                 "model",
-                '{"status":"answered","answer":"wrong [S99]",'
-                '"citation_ids":["S99"]}',
+                '{"status":"answered","answer":"wrong [S99]","citation_ids":["S99"]}',
                 "stop",
             ),
             InvalidCitationError,

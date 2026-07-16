@@ -187,9 +187,7 @@ def status_error(
         (status_error(RateLimitError, 429), "rate limit"),
         (status_error(InternalServerError, 500), "server error"),
         (
-            APITimeoutError(
-                request=httpx.Request("POST", "https://provider.example")
-            ),
+            APITimeoutError(request=httpx.Request("POST", "https://provider.example")),
             "timed out",
         ),
         (

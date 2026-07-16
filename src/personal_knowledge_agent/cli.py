@@ -131,9 +131,7 @@ def _search(query: str, limit: int, mode: SearchMode, database: Path) -> None:
 
 
 def _format_evidence_source(answer: GroundedAnswer, citation_id: str) -> str:
-    evidence = next(
-        item for item in answer.evidence if item.citation_id == citation_id
-    )
+    evidence = next(item for item in answer.evidence if item.citation_id == citation_id)
     if not evidence.heading_path:
         return evidence.source
     return f"{evidence.source} > {' > '.join(evidence.heading_path)}"

@@ -49,11 +49,7 @@ def run_cli(
             "stop",
         )
     )
-    settings = (
-        {"PKA_LLM_API_KEY": "test-key"}
-        if environment is None
-        else environment
-    )
+    settings = {"PKA_LLM_API_KEY": "test-key"} if environment is None else environment
     with (
         patch(
             "personal_knowledge_agent.cli.E5Embedder",
@@ -346,9 +342,7 @@ def test_ask_rejects_unknown_mode() -> None:
     [
         (
             FakeLanguageModel(
-                LanguageModelError(
-                    "Language-model provider authentication failed"
-                )
+                LanguageModelError("Language-model provider authentication failed")
             ),
             "authentication failed",
         ),
