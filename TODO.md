@@ -14,8 +14,8 @@ steps belong in `docs/superpowers/`.
 - [x] Guarantee re-ingestion atomically replaces postings and vectors together.
 - [x] Implement exact cosine semantic retrieval.
 - [x] Implement RRF fusion and `lexical`, `semantic`, `hybrid` search modes.
-- [ ] Expose search mode through `pka search --mode`.
-- [ ] Add semantic-synonym, persistence, migration, CLI, and rollback tests.
+- [x] Expose search mode through `pka search --mode`.
+- [x] Add semantic-synonym, persistence, migration, CLI, and rollback tests.
 - [ ] Run a manual real-model smoke test and record findings in the learning log.
 
 ## Phase 1 completion criteria

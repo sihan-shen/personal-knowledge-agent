@@ -10,7 +10,12 @@ import pytest
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import EmptyDocumentError, InvalidQueryError
-from personal_knowledge_agent.domain.models import Chunk, Document, SearchResult
+from personal_knowledge_agent.domain.models import (
+    Chunk,
+    Document,
+    SearchMode,
+    SearchResult,
+)
 
 
 class FakeLoader:
@@ -53,8 +58,14 @@ class FakeIndex:
         self._events.append(f"replace:{document.document_id}:{len(chunks)}")
         return self._replaced
 
-    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
-        self._events.append(f"search:{query}:{limit}")
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.LEXICAL,
+    ) -> list[SearchResult]:
+        self._events.append(f"search:{query}:{limit}:{mode.value}")
         return self._results
 
 
@@ -96,14 +107,33 @@ def test_ingest_rejects_document_that_produces_no_chunks() -> None:
     assert not any(event.startswith("replace:") for event in events)
 
 
-def test_search_delegates_query_and_limit() -> None:
+def test_search_delegates_query_limit_and_default_hybrid_mode() -> None:
     _, chunk = make_records()
     expected = [SearchResult(chunk, "/notes/rag.md", 1.0)]
     events: list[str] = []
     service = SearchService(FakeIndex(results=expected, events=events))
 
     assert service.search("RAG 检索", limit=3) == expected
-    assert events == ["search:RAG 检索:3"]
+    assert events == ["search:RAG 检索:3:hybrid"]
+
+
+def test_search_forwards_explicit_mode() -> None:
+    events: list[str] = []
+    service = SearchService(FakeIndex(events=events))
+
+    service.search("RAG", mode=SearchMode.SEMANTIC)
+
+    assert events == ["search:RAG:5:semantic"]
+
+
+def test_search_rejects_invalid_mode_before_index_call() -> None:
+    events: list[str] = []
+    service = SearchService(FakeIndex(events=events))
+
+    with pytest.raises(InvalidQueryError, match="Unsupported search mode"):
+        service.search("RAG", mode="vector")  # type: ignore[arg-type]
+
+    assert events == []
 
 
 @pytest.mark.parametrize("limit", [0, 21])
