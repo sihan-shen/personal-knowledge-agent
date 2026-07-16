@@ -24,9 +24,7 @@ def reciprocal_rank_fusion(
                 continue
             seen.add(chunk_id)
             candidates.setdefault(chunk_id, result)
-            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (
-                rank_constant + rank
-            )
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (rank_constant + rank)
 
     fused = [
         SearchResult(

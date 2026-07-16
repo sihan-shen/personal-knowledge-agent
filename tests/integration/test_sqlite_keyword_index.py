@@ -440,9 +440,7 @@ def test_semantic_search_returns_empty_when_cosine_is_not_positive(
 def test_semantic_search_rejects_stored_model_mismatch(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     document = make_document()
-    embedder = FakeEmbedder(
-        {"RAG\ntext": (1.0, 0.0), "meaning": (1.0, 0.0)}
-    )
+    embedder = FakeEmbedder({"RAG\ntext": (1.0, 0.0), "meaning": (1.0, 0.0)})
     index = make_index(database, embedder)
     index.replace_document(document, make_chunks(document, "text"))
     with sqlite3.connect(database) as connection:

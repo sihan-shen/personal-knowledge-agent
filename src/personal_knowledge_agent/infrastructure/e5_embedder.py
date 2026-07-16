@@ -106,9 +106,7 @@ class E5Embedder:
         rows: list[list[float]] = []
         for row in output:
             if not isinstance(row, (list, tuple)):
-                raise EmbeddingError(
-                    "Embedding model must return one vector per input"
-                )
+                raise EmbeddingError("Embedding model must return one vector per input")
             try:
                 rows.append([float(value) for value in row])
             except (TypeError, ValueError, OverflowError) as error:
