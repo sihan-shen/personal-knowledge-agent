@@ -53,5 +53,9 @@ class InvalidAnswerSchemaError(StructuredOutputError):
     """Raised when model output is not the expected JSON object shape."""
 
 
+class InvalidRouteSchemaError(StructuredOutputError):
+    """Raised when model output is not the expected route JSON shape."""
+
+
 class InvalidCitationError(StructuredOutputError):
     """Raised when model citations do not match the supplied evidence."""

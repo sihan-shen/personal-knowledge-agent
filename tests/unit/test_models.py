@@ -6,9 +6,11 @@ from math import inf, nan
 import pytest
 
 from personal_knowledge_agent.domain.models import (
+    AgentResponse,
     AnswerStatus,
     ChatMessage,
     Chunk,
+    DirectIntent,
     Document,
     Embedding,
     Evidence,
@@ -16,6 +18,10 @@ from personal_knowledge_agent.domain.models import (
     IngestionResult,
     MessageRole,
     ModelOutput,
+    RouteAction,
+    RouteDecision,
+    RouterFallbackReason,
+    RouteSource,
     SearchMode,
     SearchResult,
     make_chunk_id,
@@ -204,3 +210,98 @@ def test_grounded_answer_is_immutable_and_preserves_all_evidence() -> None:
 def test_grounded_answer_rejects_blank_answer() -> None:
     with pytest.raises(ValueError, match="answer"):
         GroundedAnswer(AnswerStatus.INSUFFICIENT_EVIDENCE, " ", (), (), None)
+
+
+def test_route_enum_values_are_stable() -> None:
+    assert [action.value for action in RouteAction] == ["direct", "retrieve"]
+    assert [intent.value for intent in DirectIntent] == [
+        "greeting",
+        "capabilities",
+        "thanks",
+    ]
+    assert [source.value for source in RouteSource] == ["rule", "llm", "fallback"]
+    assert [reason.value for reason in RouterFallbackReason] == [
+        "provider_error",
+        "invalid_output",
+    ]
+
+
+def test_direct_route_requires_direct_intent() -> None:
+    with pytest.raises(ValueError, match="direct route requires"):
+        RouteDecision(RouteAction.DIRECT, None, RouteSource.RULE)
+
+
+def test_retrieve_route_rejects_direct_intent() -> None:
+    with pytest.raises(ValueError, match="retrieve route"):
+        RouteDecision(
+            RouteAction.RETRIEVE,
+            DirectIntent.GREETING,
+            RouteSource.LLM,
+        )
+
+
+def test_fallback_route_requires_retrieval_and_reason() -> None:
+    with pytest.raises(ValueError, match="fallback route"):
+        RouteDecision(RouteAction.RETRIEVE, None, RouteSource.FALLBACK)
+
+    with pytest.raises(ValueError, match="fallback route"):
+        RouteDecision(
+            RouteAction.DIRECT,
+            DirectIntent.GREETING,
+            RouteSource.FALLBACK,
+            RouterFallbackReason.PROVIDER_ERROR,
+        )
+
+
+def test_non_fallback_route_rejects_fallback_reason() -> None:
+    with pytest.raises(ValueError, match="non-fallback route"):
+        RouteDecision(
+            RouteAction.RETRIEVE,
+            None,
+            RouteSource.LLM,
+            RouterFallbackReason.INVALID_OUTPUT,
+        )
+
+
+def test_agent_response_requires_exactly_one_answer() -> None:
+    route = RouteDecision(
+        RouteAction.DIRECT,
+        DirectIntent.GREETING,
+        RouteSource.RULE,
+    )
+
+    with pytest.raises(ValueError, match="exactly one"):
+        AgentResponse(route, None, None)
+
+
+def test_agent_response_answer_kind_must_match_route() -> None:
+    grounded = GroundedAnswer(
+        AnswerStatus.INSUFFICIENT_EVIDENCE,
+        "Not enough evidence.",
+        (),
+        (),
+        None,
+    )
+    direct_route = RouteDecision(
+        RouteAction.DIRECT,
+        DirectIntent.GREETING,
+        RouteSource.RULE,
+    )
+    retrieve_route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
+
+    with pytest.raises(ValueError, match="direct route"):
+        AgentResponse(direct_route, None, grounded)
+    with pytest.raises(ValueError, match="retrieve route"):
+        AgentResponse(retrieve_route, "hello", None)
+
+
+def test_agent_response_is_frozen() -> None:
+    route = RouteDecision(
+        RouteAction.DIRECT,
+        DirectIntent.THANKS,
+        RouteSource.RULE,
+    )
+    response = AgentResponse(route, "You're welcome.", None)
+
+    with pytest.raises(FrozenInstanceError):
+        response.direct_answer = "changed"  # type: ignore[misc]
