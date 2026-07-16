@@ -1,6 +1,7 @@
 """Tests for the grounded-answer prompt and provider data boundary."""
 
 import json
+from typing import cast
 
 import pytest
 
@@ -21,9 +22,12 @@ def make_evidence(text: str = "RAG uses retrieved evidence.") -> Evidence:
     )
 
 
-def evidence_payload(user_content: str) -> object:
+def evidence_payload(user_content: str) -> list[dict[str, object]]:
     marker = "EVIDENCE_JSON:\n"
-    return json.loads(user_content.split(marker, maxsplit=1)[1])
+    return cast(
+        list[dict[str, object]],
+        json.loads(user_content.split(marker, maxsplit=1)[1]),
+    )
 
 
 def test_prompt_contains_grounding_rules_and_two_json_examples() -> None:

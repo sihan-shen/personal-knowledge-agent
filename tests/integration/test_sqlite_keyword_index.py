@@ -222,7 +222,9 @@ def test_persists_little_endian_float32_embedding_per_chunk(tmp_path: Path) -> N
         "SELECT chunk_id, model_id, dimensions, vector FROM embeddings",
     )
     assert rows[0][:3] == (chunk.chunk_id, "fake-e5", 2)
-    assert struct.unpack("<2f", rows[0][3]) == pytest.approx((0.6, 0.8))
+    vector = rows[0][3]
+    assert isinstance(vector, bytes)
+    assert struct.unpack("<2f", vector) == pytest.approx((0.6, 0.8))
     assert embedder.document_calls == [[passage]]
 
 

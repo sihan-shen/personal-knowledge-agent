@@ -11,6 +11,7 @@ import httpx
 import pytest
 from openai import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
@@ -168,7 +169,10 @@ def test_adapter_rejects_unusable_provider_responses(
         model.generate(messages())
 
 
-def status_error(error_type: type[Exception], status_code: int) -> Exception:
+def status_error(
+    error_type: type[APIStatusError],
+    status_code: int,
+) -> APIStatusError:
     request = httpx.Request("POST", "https://provider.example/chat/completions")
     response = httpx.Response(status_code, request=request, json={"error": "secret"})
     return error_type("provider leaked api-key-value", response=response, body=None)
