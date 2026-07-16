@@ -10,6 +10,7 @@ from personal_knowledge_agent.domain.models import (
     Chunk,
     Document,
     Embedding,
+    SearchMode,
     SearchResult,
 )
 
@@ -58,6 +59,12 @@ class KnowledgeIndex(Protocol):
         """Replace a source atomically and report whether it existed."""
         ...
 
-    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.LEXICAL,
+    ) -> list[SearchResult]:
         """Return the highest-ranked chunks for a query."""
         ...

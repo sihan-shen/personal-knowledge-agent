@@ -19,6 +19,7 @@ from personal_knowledge_agent.domain.models import (
     Chunk,
     Document,
     Embedding,
+    SearchMode,
     make_chunk_id,
     make_document_id,
 )
@@ -394,3 +395,89 @@ def test_search_returns_empty_list_when_no_terms_match(tmp_path: Path) -> None:
     index.replace_document(document, make_chunks(document, "retrieval evidence"))
 
     assert index.search("gardening") == []
+
+
+def test_semantic_search_orders_positive_cosine_scores(tmp_path: Path) -> None:
+    database = tmp_path / "knowledge.db"
+    document = make_document()
+    chunks = make_chunks(document, "closest", "partial", "opposite")
+    embedder = FakeEmbedder(
+        {
+            "RAG\nclosest": (1.0, 0.0),
+            "RAG\npartial": (1.0, 1.0),
+            "RAG\nopposite": (-1.0, 0.0),
+            "meaning": (1.0, 0.0),
+        }
+    )
+    index = make_index(database, embedder)
+    index.replace_document(document, chunks)
+
+    results = index.search("meaning", mode=SearchMode.SEMANTIC)
+
+    assert [result.chunk.text for result in results] == ["closest", "partial"]
+    assert results[0].score == pytest.approx(1.0)
+    assert results[1].score == pytest.approx(2**-0.5)
+    assert embedder.query_calls == ["meaning"]
+
+
+def test_semantic_search_returns_empty_when_cosine_is_not_positive(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "knowledge.db"
+    document = make_document()
+    embedder = FakeEmbedder(
+        {
+            "RAG\nunrelated": (0.0, 1.0),
+            "meaning": (1.0, 0.0),
+        }
+    )
+    index = make_index(database, embedder)
+    index.replace_document(document, make_chunks(document, "unrelated"))
+
+    assert index.search("meaning", mode=SearchMode.SEMANTIC) == []
+
+
+def test_semantic_search_rejects_stored_model_mismatch(tmp_path: Path) -> None:
+    database = tmp_path / "knowledge.db"
+    document = make_document()
+    embedder = FakeEmbedder(
+        {"RAG\ntext": (1.0, 0.0), "meaning": (1.0, 0.0)}
+    )
+    index = make_index(database, embedder)
+    index.replace_document(document, make_chunks(document, "text"))
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE embeddings SET model_id = 'old-model'")
+
+    with pytest.raises(IndexStorageError, match="Re-ingest.*old-model"):
+        index.search("meaning", mode=SearchMode.SEMANTIC)
+
+
+def test_semantic_search_breaks_equal_scores_by_chunk_id(tmp_path: Path) -> None:
+    database = tmp_path / "knowledge.db"
+    document = make_document()
+    chunks = make_chunks(document, "first", "second")
+    embedder = FakeEmbedder(
+        {
+            "RAG\nfirst": (1.0, 0.0),
+            "RAG\nsecond": (1.0, 0.0),
+            "meaning": (1.0, 0.0),
+        }
+    )
+    index = make_index(database, embedder)
+    index.replace_document(document, chunks)
+
+    results = index.search("meaning", mode=SearchMode.SEMANTIC)
+
+    assert [result.chunk.chunk_id for result in results] == sorted(
+        chunk.chunk_id for chunk in chunks
+    )
+
+
+def test_empty_semantic_search_does_not_call_embedding_model(tmp_path: Path) -> None:
+    embedder = FakeEmbedder({"meaning": (1.0, 0.0)})
+    index = make_index(tmp_path / "knowledge.db", embedder)
+
+    with pytest.raises(KnowledgeBaseEmptyError):
+        index.search("meaning", mode=SearchMode.SEMANTIC)
+
+    assert embedder.query_calls == []

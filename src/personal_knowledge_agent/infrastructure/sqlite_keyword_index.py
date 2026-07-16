@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
 from hashlib import sha256
-from math import log
+from math import fsum, log
 from pathlib import Path
 
 from personal_knowledge_agent.domain.errors import (
@@ -22,11 +22,15 @@ from personal_knowledge_agent.domain.models import (
     Chunk,
     Document,
     Embedding,
+    SearchMode,
     SearchResult,
 )
 from personal_knowledge_agent.domain.protocols import EmbeddingModel
 from personal_knowledge_agent.infrastructure.mixed_tokenizer import (
     MixedLanguageTokenizer,
+)
+from personal_knowledge_agent.infrastructure.retrieval_fusion import (
+    reciprocal_rank_fusion,
 )
 
 _SCHEMA_VERSION = 2
@@ -178,11 +182,21 @@ class SQLiteKeywordIndex:
 
         return existed
 
-    def search(self, query: str, *, limit: int = 5) -> list[SearchResult]:
-        """Return positive-scoring chunks ordered by BM25 relevance."""
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.LEXICAL,
+    ) -> list[SearchResult]:
+        """Return chunks ordered by the selected retrieval strategy."""
         query_tokens = list(dict.fromkeys(self._tokenizer.tokenize(query)))
         if not query_tokens:
             raise InvalidQueryError("Query contains no searchable terms")
+        try:
+            selected_mode = SearchMode(mode)
+        except ValueError as error:
+            raise InvalidQueryError(f"Unsupported search mode: {mode}") from error
 
         with closing(self._open()) as connection:
             try:
@@ -196,15 +210,36 @@ class SQLiteKeywordIndex:
                         "Knowledge base is empty. Ingest a document first."
                     )
 
-                rows = self._matching_postings(connection, query_tokens)
-                if not rows:
-                    return []
-                return self._rank_rows(
-                    rows,
-                    chunk_count=chunk_count,
-                    average_length=average_length,
-                    limit=limit,
-                )
+                if selected_mode is SearchMode.LEXICAL:
+                    return self._lexical_search(
+                        connection,
+                        query_tokens,
+                        chunk_count=chunk_count,
+                        average_length=average_length,
+                        limit=limit,
+                    )
+                if selected_mode is SearchMode.SEMANTIC:
+                    return self._semantic_search(connection, query, limit=limit)
+                if selected_mode is SearchMode.HYBRID:
+                    candidate_limit = max(20, limit * 4)
+                    lexical = self._lexical_search(
+                        connection,
+                        query_tokens,
+                        chunk_count=chunk_count,
+                        average_length=average_length,
+                        limit=candidate_limit,
+                    )
+                    semantic = self._semantic_search(
+                        connection,
+                        query,
+                        limit=candidate_limit,
+                    )
+                    return reciprocal_rank_fusion(
+                        lexical,
+                        semantic,
+                        limit=limit,
+                    )
+                raise InvalidQueryError(f"Unsupported search mode: {selected_mode}")
             except (
                 sqlite3.Error,
                 json.JSONDecodeError,
@@ -214,6 +249,105 @@ class SQLiteKeywordIndex:
                 raise IndexStorageError(
                     f"Could not search knowledge index: {self._database_path}"
                 ) from error
+
+    def _lexical_search(
+        self,
+        connection: sqlite3.Connection,
+        query_tokens: list[str],
+        *,
+        chunk_count: int,
+        average_length: float,
+        limit: int,
+    ) -> list[SearchResult]:
+        rows = self._matching_postings(connection, query_tokens)
+        if not rows:
+            return []
+        return self._rank_rows(
+            rows,
+            chunk_count=chunk_count,
+            average_length=average_length,
+            limit=limit,
+        )
+
+    def _semantic_search(
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[SearchResult]:
+        query_embedding = self._embedding_model.embed_query(query)
+        if query_embedding.model_id != self._embedding_model.model_id:
+            raise EmbeddingError(
+                "Query embedding model identifier does not match configured model"
+            )
+
+        rows = connection.execute(
+            """
+            SELECT
+                e.model_id,
+                e.dimensions,
+                e.vector,
+                c.chunk_id,
+                c.document_id,
+                c.position,
+                c.text,
+                c.heading_path,
+                d.source
+            FROM embeddings AS e
+            JOIN chunks AS c ON c.chunk_id = e.chunk_id
+            JOIN documents AS d ON d.document_id = c.document_id
+            """
+        ).fetchall()
+
+        ranked: list[SearchResult] = []
+        for row in rows:
+            stored_model = str(row["model_id"])
+            if stored_model != self._embedding_model.model_id:
+                raise IndexStorageError(
+                    "Re-ingest the knowledge base: stored embedding model "
+                    f"{stored_model} does not match {self._embedding_model.model_id}"
+                )
+            dimensions = int(row["dimensions"])
+            if dimensions != len(query_embedding.values):
+                raise IndexStorageError(
+                    "Re-ingest the knowledge base: stored embedding dimension "
+                    f"{dimensions} does not match query dimension "
+                    f"{len(query_embedding.values)}"
+                )
+            vector_value = row["vector"]
+            if not isinstance(vector_value, (bytes, bytearray, memoryview)):
+                raise IndexStorageError("Stored embedding vector is not a BLOB")
+            vector = _unpack_vector(bytes(vector_value), dimensions=dimensions)
+            score = fsum(
+                query_value * stored_value
+                for query_value, stored_value in zip(
+                    query_embedding.values,
+                    vector,
+                    strict=True,
+                )
+            )
+            if score > 0:
+                ranked.append(self._semantic_result(row, score))
+
+        ranked.sort(key=lambda result: (-result.score, result.chunk.chunk_id))
+        return ranked[:limit]
+
+    @staticmethod
+    def _semantic_result(row: sqlite3.Row, score: float) -> SearchResult:
+        heading_value = json.loads(str(row["heading_path"]))
+        if not isinstance(heading_value, list) or not all(
+            isinstance(item, str) for item in heading_value
+        ):
+            raise ValueError("Stored heading_path is not a string list")
+        chunk = Chunk(
+            chunk_id=str(row["chunk_id"]),
+            document_id=str(row["document_id"]),
+            position=int(row["position"]),
+            text=str(row["text"]),
+            heading_path=tuple(heading_value),
+        )
+        return SearchResult(chunk=chunk, source=str(row["source"]), score=score)
 
     @staticmethod
     def _matching_postings(
