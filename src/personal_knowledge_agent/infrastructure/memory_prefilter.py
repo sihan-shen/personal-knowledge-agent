@@ -16,10 +16,21 @@ _DURABLE_SIGNAL_PATTERNS = (
     re.compile(r"我\s*已经\s*学完", re.IGNORECASE),
 )
 
+_INTERROGATIVE_PATTERNS = (
+    re.compile(
+        r"^(?:what|why|how|when|where|who|which|do|does|did|is|are|was|were|"
+        r"can|could|would|should|will|has|have)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:什么|为什么|怎么|如何|是否|是不是|吗|呢|哪(?:个|些|里|儿)?|谁|多少)"),
+)
+
 
 def should_extract_memory(message: str) -> bool:
     """Return whether a message contains an approved durable first-person signal."""
     normalized = " ".join(unicodedata.normalize("NFKC", message).split())
-    if "?" in normalized:
+    if "?" in normalized or any(
+        pattern.search(normalized) for pattern in _INTERROGATIVE_PATTERNS
+    ):
         return False
     return any(pattern.search(normalized) for pattern in _DURABLE_SIGNAL_PATTERNS)

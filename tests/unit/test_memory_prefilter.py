@@ -34,7 +34,7 @@ def test_prefilter_rejects_ordinary_or_nonstatement_text(message: str) -> None:
 
 @pytest.mark.parametrize(
     "message",
-    ["What is my goal?", "我的目标是什么？"],
+    ["What is my goal?", "What is my goal", "我的目标是什么？", "我的目标是什么"],
 )
 def test_prefilter_rejects_questions_containing_durable_phrases(
     message: str,
