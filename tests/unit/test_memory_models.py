@@ -100,9 +100,7 @@ def test_hashes_are_normalized_but_slot_specific() -> None:
     assert memory_source_hash(" My\u3000GOAL ") == memory_source_hash("my goal")
     assert memory_proposal_hash(
         MemoryType.GOAL, "goal.rag", "RAG Notes"
-    ) != memory_proposal_hash(
-        MemoryType.PROJECT, "project.rag", "RAG Notes"
-    )
+    ) != memory_proposal_hash(MemoryType.PROJECT, "project.rag", "RAG Notes")
 
 
 def test_hashes_are_lowercase_sha256_hex() -> None:

@@ -107,9 +107,7 @@ def memory_source_hash(message: str) -> str:
     return sha256(comparison.encode("utf-8")).hexdigest()
 
 
-def memory_proposal_hash(
-    memory_type: MemoryType, memory_key: str, content: str
-) -> str:
+def memory_proposal_hash(memory_type: MemoryType, memory_key: str, content: str) -> str:
     """Hash one normalized type, slot, and content proposal."""
     if not isinstance(memory_type, MemoryType):
         raise ValueError("memory_type must be a MemoryType")

@@ -22,7 +22,9 @@ _INTERROGATIVE_PATTERNS = (
         r"can|could|would|should|will|has|have)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"(?:什么|为什么|怎么|如何|是否|是不是|吗|呢|哪(?:个|些|里|儿)?|谁|多少)"),
+    re.compile(
+        r"(?:什么|为什么|怎么|如何|是否|是不是|吗|呢|哪(?:个|些|里|儿)?|谁|多少)"
+    ),
 )
 
 
