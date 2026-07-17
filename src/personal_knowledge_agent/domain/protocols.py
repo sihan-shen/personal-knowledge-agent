@@ -6,6 +6,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+from personal_knowledge_agent.domain.memory import (
+    MemoryActivationAction,
+    MemoryProposal,
+    MemoryRecord,
+    MemorySearchResult,
+    MemoryStatus,
+    MemoryType,
+)
 from personal_knowledge_agent.domain.models import (
     ChatMessage,
     Chunk,
@@ -86,4 +94,79 @@ class KnowledgeIndex(Protocol):
         mode: SearchMode = SearchMode.LEXICAL,
     ) -> list[SearchResult]:
         """Return the highest-ranked chunks for a query."""
+        ...
+
+
+class MemoryExtractor(Protocol):
+    """Extract normalized memory proposals from one user message."""
+
+    def extract(self, message: str) -> tuple[MemoryProposal, ...]:
+        """Return validated candidate memories."""
+        ...
+
+
+class MemorySafetyPolicy(Protocol):
+    """Check local text against prohibited memory categories."""
+
+    def allows(self, *values: str) -> bool:
+        """Return false when any supplied local text matches a prohibited category."""
+        ...
+
+
+class MemoryStore(Protocol):
+    """Persist and retrieve long-term memories through their lifecycle."""
+
+    def create_pending(
+        self, proposals: Sequence[MemoryProposal], *, source_hash: str
+    ) -> tuple[MemoryRecord, ...]:
+        """Persist automatic proposals as pending candidates."""
+        ...
+
+    def remember(
+        self,
+        memory_type: MemoryType,
+        memory_key: str,
+        content: str,
+        *,
+        action: MemoryActivationAction = MemoryActivationAction.ACTIVATE,
+        replace_id: str | None = None,
+    ) -> MemoryRecord:
+        """Create one explicit active memory."""
+        ...
+
+    def approve(
+        self,
+        candidate_id: str,
+        *,
+        action: MemoryActivationAction,
+        replace_id: str | None = None,
+    ) -> MemoryRecord:
+        """Activate one pending memory, applying conflict behavior atomically."""
+        ...
+
+    def reject(self, candidate_id: str) -> None:
+        """Delete one pending candidate and retain only its fingerprint."""
+        ...
+
+    def forget(self, memory_id: str) -> int:
+        """Delete one memory and report the number of records removed."""
+        ...
+
+    def list_memories(
+        self,
+        *,
+        status: MemoryStatus | None = None,
+        memory_type: MemoryType | None = None,
+    ) -> list[MemoryRecord]:
+        """List memories matching optional lifecycle filters."""
+        ...
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        memory_type: MemoryType | None = None,
+    ) -> list[MemorySearchResult]:
+        """Return ranked active memories matching a query."""
         ...

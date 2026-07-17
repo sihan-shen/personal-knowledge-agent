@@ -59,3 +59,31 @@ class InvalidRouteSchemaError(StructuredOutputError):
 
 class InvalidCitationError(StructuredOutputError):
     """Raised when model citations do not match the supplied evidence."""
+
+
+class MemoryFeatureError(KnowledgeError):
+    """Base class for user-facing long-term memory errors."""
+
+
+class InvalidMemoryError(MemoryFeatureError):
+    """Raised when a memory operation receives invalid input."""
+
+
+class UnsafeMemoryError(MemoryFeatureError):
+    """Raised when memory content violates the local safety policy."""
+
+
+class MemoryConflictError(MemoryFeatureError):
+    """Raised when a memory conflicts with an active stable slot."""
+
+
+class MemoryNotFoundError(MemoryFeatureError):
+    """Raised when a requested memory record does not exist."""
+
+
+class MemoryStorageError(MemoryFeatureError):
+    """Raised when persistent memory storage cannot complete an operation."""
+
+
+class InvalidMemorySchemaError(MemoryFeatureError):
+    """Raised when extracted output violates the memory schema."""
