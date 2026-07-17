@@ -34,6 +34,16 @@ def test_prefilter_rejects_ordinary_or_nonstatement_text(message: str) -> None:
 
 @pytest.mark.parametrize(
     "message",
+    ["What is my goal?", "我的目标是什么？"],
+)
+def test_prefilter_rejects_questions_containing_durable_phrases(
+    message: str,
+) -> None:
+    assert should_extract_memory(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
     [
         "ＭＹ   ＧＯＡＬ is to learn RAG.",
         "I\n\tprefer concise answers.",

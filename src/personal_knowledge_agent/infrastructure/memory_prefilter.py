@@ -20,4 +20,6 @@ _DURABLE_SIGNAL_PATTERNS = (
 def should_extract_memory(message: str) -> bool:
     """Return whether a message contains an approved durable first-person signal."""
     normalized = " ".join(unicodedata.normalize("NFKC", message).split())
+    if "?" in normalized:
+        return False
     return any(pattern.search(normalized) for pattern in _DURABLE_SIGNAL_PATTERNS)

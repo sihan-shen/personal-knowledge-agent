@@ -17,6 +17,9 @@ _SECRET_PATTERNS = (
 _TERM_SEPARATOR_PATTERN = re.compile(r"[._-]+")
 
 _PROHIBITED_TERMS = (
+    "password",
+    "api key",
+    "private key",
     "passport",
     "social security",
     "government id",
