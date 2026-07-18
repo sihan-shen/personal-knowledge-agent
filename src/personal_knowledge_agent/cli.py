@@ -13,7 +13,11 @@ from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.memory_admin import MemoryAdminService
+from personal_knowledge_agent.application.memory_aware_answer import (
+    MemoryAwareAnswerService,
+)
 from personal_knowledge_agent.application.memory_proposal import MemoryProposalService
+from personal_knowledge_agent.application.memory_recall import MemoryRecallService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
@@ -25,6 +29,8 @@ from personal_knowledge_agent.domain.memory import (
     MAX_MEMORY_EXTRACTION_INPUT_LENGTH,
     MemoryActivationAction,
     MemoryExtractionSkipReason,
+    MemoryRecallReport,
+    MemoryRecallWarning,
     MemoryRecord,
     MemorySearchResult,
     MemoryStatus,
@@ -41,6 +47,7 @@ from personal_knowledge_agent.domain.models import (
     SearchMode,
     SearchResult,
 )
+from personal_knowledge_agent.domain.protocols import MemoryRecaller
 from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.hybrid_question_router import (
     HybridQuestionRouter,
@@ -53,6 +60,9 @@ from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChu
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.memory_prefilter import (
     should_extract_memory,
+)
+from personal_knowledge_agent.infrastructure.memory_relevance import (
+    ConservativeMemoryRelevancePolicy,
 )
 from personal_knowledge_agent.infrastructure.memory_safety import (
     LocalMemorySafetyPolicy,
@@ -83,6 +93,23 @@ _VISIBLE_MEMORY_SKIP_LABELS = {
     MemoryExtractionSkipReason.EMBEDDING_ERROR: "embedding error",
     MemoryExtractionSkipReason.STORAGE_ERROR: "storage error",
 }
+_MEMORY_RECALL_WARNING_LABELS = {
+    MemoryRecallWarning.EMBEDDING_ERROR: "embedding error",
+    MemoryRecallWarning.STORAGE_ERROR: "storage error",
+    MemoryRecallWarning.UNSAFE_MEMORY: "unsafe memory",
+    MemoryRecallWarning.AMBIGUOUS_MEMORY_SLOT: "ambiguous memory slot",
+}
+
+
+class _UnavailableMemoryRecaller:
+    """Return one safe warning when optional recall cannot be constructed."""
+
+    def __init__(self, warning: MemoryRecallWarning) -> None:
+        self._warning = warning
+
+    def recall(self, query: str, *, limit: int = 3) -> MemoryRecallReport:
+        del query, limit
+        return MemoryRecallReport((), (self._warning,))
 
 
 def _search_limit(value: str) -> int:
@@ -516,7 +543,52 @@ def _print_agent_answer(response: AgentResponse) -> None:
         print(response.direct_answer)
         return
     assert response.grounded_answer is not None
-    _print_answer(response.grounded_answer)
+    if response.memory_recall is not None:
+        _print_memory_recall_warnings(response.memory_recall)
+    _print_contextual_answer(response.grounded_answer, response.memory_recall)
+
+
+def _print_memory_recall_warnings(report: MemoryRecallReport) -> None:
+    for warning in MemoryRecallWarning:
+        if warning in report.warnings:
+            print(f"Memory recall warning: {_MEMORY_RECALL_WARNING_LABELS[warning]}")
+
+
+def _print_contextual_answer(
+    answer: GroundedAnswer,
+    recall: MemoryRecallReport | None,
+) -> None:
+    if answer.status is AnswerStatus.INSUFFICIENT_EVIDENCE:
+        print("Insufficient evidence:")
+        print(answer.answer)
+        return
+
+    print("Answer:")
+    print(answer.answer)
+    source_ids = tuple(
+        citation_id
+        for citation_id in answer.citation_ids
+        if citation_id.startswith("S")
+    )
+    memory_ids = tuple(
+        citation_id
+        for citation_id in answer.citation_ids
+        if citation_id.startswith("M")
+    )
+    if source_ids:
+        print("\nSources:")
+        for citation_id in source_ids:
+            print(f"[{citation_id}] {_format_evidence_source(answer, citation_id)}")
+    if memory_ids:
+        assert recall is not None
+        recalled = {item.citation_id: item.memory for item in recall.memories}
+        print("\nMemories used:")
+        for citation_id in memory_ids:
+            memory = recalled[citation_id]
+            print(
+                f"[{citation_id}] {memory.memory_type.value}.{memory.memory_key} "
+                f"— {memory.content}"
+            )
 
 
 def _memory_database_suffix(database: Path) -> str:
@@ -596,9 +668,31 @@ def _agent(
         model_id=settings.model_id,
     )
     answer_service = AnswerService(SearchService(index), language_model)
+
+    def memory_answerer() -> MemoryAwareAnswerService:
+        recaller: MemoryRecaller
+        try:
+            memory_store = _memory_store(memory_database)
+        except EmbeddingError:
+            recaller = _UnavailableMemoryRecaller(MemoryRecallWarning.EMBEDDING_ERROR)
+        except MemoryStorageError:
+            recaller = _UnavailableMemoryRecaller(MemoryRecallWarning.STORAGE_ERROR)
+        else:
+            recaller = MemoryRecallService(
+                memory_store,
+                ConservativeMemoryRelevancePolicy(),
+                LocalMemorySafetyPolicy(),
+            )
+        return MemoryAwareAnswerService(
+            SearchService(index),
+            recaller,
+            language_model,
+        )
+
     response = AgentService(
         HybridQuestionRouter(language_model),
         answer_service,
+        memory_answerer,
     ).respond(query, limit=limit, mode=mode, on_route=_print_route)
     _print_agent_answer(response)
     if response.route.source is RouteSource.FALLBACK:

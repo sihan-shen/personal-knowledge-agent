@@ -26,6 +26,8 @@ from personal_knowledge_agent.domain.errors import (
 )
 from personal_knowledge_agent.domain.memory import (
     MemoryProposal,
+    MemoryRecallReport,
+    MemoryRecallWarning,
     MemoryType,
     memory_source_hash,
 )
@@ -111,6 +113,19 @@ def seed_pending_memory(
         (MemoryProposal(memory_type, memory_key, content),),
         source_hash=memory_source_hash(f"source for {memory_key}"),
     )
+
+
+def seed_active_memory(
+    database: Path,
+    memory_type: MemoryType,
+    memory_key: str,
+    content: str,
+) -> None:
+    """Seed one confirmed memory through the real persistence boundary."""
+    SQLiteMemoryStore(
+        database,
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    ).remember(memory_type, memory_key, content)
 
 
 def test_health_command_reports_healthy_project() -> None:
@@ -1240,13 +1255,17 @@ def test_agent_direct_rule_displays_visible_route_without_model_call(
 ) -> None:
     model = FakeLanguageModel(RuntimeError("must not be called"))
 
-    result = run_cli(
-        "agent",
-        "你好",
-        "--db",
-        str(tmp_path / "knowledge.db"),
-        language_model=model,
-    )
+    with patch(
+        "personal_knowledge_agent.cli._memory_store",
+        side_effect=AssertionError("direct route must not construct memory storage"),
+    ):
+        result = run_cli(
+            "agent",
+            "你好",
+            "--db",
+            str(tmp_path / "knowledge.db"),
+            language_model=model,
+        )
 
     assert result.returncode == 0
     assert result.stdout == (
@@ -1292,6 +1311,183 @@ def test_agent_llm_retrieve_displays_route_then_grounded_answer(
     assert len(model.calls) == 2
 
 
+def test_agent_answers_from_active_memory_when_knowledge_base_is_empty(
+    tmp_path: Path,
+) -> None:
+    memory_database = tmp_path / "memory.db"
+    seed_active_memory(
+        memory_database,
+        MemoryType.PREFERENCE,
+        "answer_style",
+        "Prefer concise answers.",
+    )
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop"),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"You prefer concise answers. [M1]",'
+                '"citation_ids":["M1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "What answer style do I prefer?",
+        "--db",
+        str(tmp_path / "knowledge.db"),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: retrieve (llm)\n"
+        "Answer:\n"
+        "You prefer concise answers. [M1]\n"
+        "\nMemories used:\n"
+        "[M1] preference.answer_style — Prefer concise answers.\n"
+    )
+    assert result.stderr == ""
+
+
+def test_agent_renders_document_and_memory_citations_in_separate_sections(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    seed_active_memory(
+        memory_database,
+        MemoryType.GOAL,
+        "rag_project",
+        "Build a portfolio-ready RAG project.",
+    )
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop"),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Use retrieval for the project. '
+                '[S1] [M1]","citation_ids":["S1","M1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How should I build my RAG project?",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: retrieve (llm)\n"
+        "Answer:\n"
+        "Use retrieval for the project. [S1] [M1]\n"
+        "\nSources:\n"
+        f"[S1] {document.resolve()} > RAG\n"
+        "\nMemories used:\n"
+        "[M1] goal.rag_project — Build a portfolio-ready RAG project.\n"
+    )
+
+
+def test_agent_does_not_display_supplied_but_uncited_memory(tmp_path: Path) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    seed_active_memory(
+        memory_database,
+        MemoryType.PREFERENCE,
+        "answer_style",
+        "Prefer concise answers.",
+    )
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop"),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Retrieval uses evidence. [S1]",'
+                '"citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How should retrieval answer concisely?",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert "\nSources:\n[S1] " in result.stdout
+    assert "Memories used:" not in result.stdout
+    assert "Prefer concise answers." not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("warning", "label"),
+    [
+        (MemoryRecallWarning.UNSAFE_MEMORY, "unsafe memory"),
+        (MemoryRecallWarning.AMBIGUOUS_MEMORY_SLOT, "ambiguous memory slot"),
+    ],
+)
+def test_agent_displays_safe_policy_recall_warning_once(
+    tmp_path: Path,
+    warning: MemoryRecallWarning,
+    label: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop"),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    with patch(
+        "personal_knowledge_agent.cli.MemoryRecallService.recall",
+        return_value=MemoryRecallReport((), (warning,)),
+    ):
+        result = run_cli(
+            "agent",
+            "How does RAG work?",
+            "--db",
+            str(database),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stdout.count(f"Memory recall warning: {label}\n") == 1
+    assert result.stdout.startswith(
+        f"Route: retrieve (llm)\nMemory recall warning: {label}\nAnswer:\n"
+    )
+
+
 def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(
     tmp_path: Path,
 ) -> None:
@@ -1315,19 +1511,15 @@ def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(
         ]
     )
 
-    with patch(
-        "personal_knowledge_agent.cli._memory_store",
-        side_effect=AssertionError("memory store must not be constructed"),
-    ):
-        result = run_cli(
-            "agent",
-            "How does RAG work?",
-            "--db",
-            str(database),
-            "--memory-db",
-            str(memory_database),
-            language_model=model,
-        )
+    result = run_cli(
+        "agent",
+        "How does RAG work?",
+        "--db",
+        str(database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
 
     assert result.returncode == 0
     assert result.stdout == (
@@ -1339,7 +1531,7 @@ def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(
     )
     assert result.stderr == ""
     assert len(model.calls) == 2
-    assert not memory_database.exists()
+    assert memory_database.exists()
 
 
 def test_agent_proposes_pending_memory_after_answer_and_keeps_it_out_of_search(
@@ -1567,28 +1759,24 @@ def test_agent_local_memory_guards_skip_before_extraction_call(
         ]
     )
 
-    with patch(
-        "personal_knowledge_agent.cli._memory_store",
-        side_effect=AssertionError("memory store must not be constructed"),
-    ):
-        result = run_cli(
-            "agent",
-            query,
-            "--mode",
-            "lexical",
-            "--db",
-            str(knowledge_database),
-            "--memory-db",
-            str(memory_database),
-            language_model=model,
-        )
+    result = run_cli(
+        "agent",
+        query,
+        "--mode",
+        "lexical",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
 
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
     assert len(model.calls) == 2
     assert "sk-provider-secret-123456789" not in result.stdout + result.stderr
-    assert not memory_database.exists()
+    assert memory_database.exists()
 
 
 def test_agent_candidate_displays_full_content_before_approval(
@@ -1951,7 +2139,10 @@ def test_agent_memory_dependency_construction_failure_keeps_answer(
 
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
+    assert result.stdout.startswith(
+        f"Route: retrieve (llm)\nMemory recall warning: {safe_category}\n"
+        "Answer:\nGrounded. [S1]\n"
+    )
     assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
     assert "model-load-private" not in result.stdout
     assert "sqlite-open-private" not in result.stdout
@@ -2127,13 +2318,17 @@ def test_agent_router_failure_displays_safe_fallback_and_retrieves(
         ]
     )
 
-    result = run_cli(
-        "agent",
-        "How does RAG work?",
-        "--db",
-        str(database),
-        language_model=model,
-    )
+    with patch(
+        "personal_knowledge_agent.cli._memory_store",
+        side_effect=AssertionError("fallback route must not construct memory storage"),
+    ):
+        result = run_cli(
+            "agent",
+            "How does RAG work?",
+            "--db",
+            str(database),
+            language_model=model,
+        )
 
     assert result.returncode == 0
     assert result.stdout.startswith(route_line + "Answer:\nGrounded. [S1]\n")
@@ -2196,7 +2391,7 @@ def test_agent_failed_route_does_not_extract_durable_memory(
     assert "Memory extraction skipped:" not in result.stdout
     assert "router-provider-private" not in result.stdout + result.stderr
     assert len(model.calls) == 2
-    assert not memory_database.exists()
+    assert memory_database.exists() is (route_line == "Route: retrieve (llm)\n")
 
 
 @pytest.mark.parametrize(
@@ -2250,24 +2445,20 @@ def test_agent_keeps_route_visible_when_grounded_generation_fails(
     assert "answer generation failed" in result.stderr
     assert "Traceback" not in result.stderr
     assert len(model.calls) == 2
-    assert not memory_database.exists()
+    assert memory_database.exists() is (route_line == "Route: retrieve (llm)\n")
 
 
-def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
+def test_agent_empty_document_and_memory_context_returns_local_refusal(
+    tmp_path: Path,
+) -> None:
     memory_database = tmp_path / "memory.db"
     model = ScriptedLanguageModel(
-        [
-            ModelOutput(
-                "router",
-                '{"action":"retrieve","direct_intent":null}',
-                "stop",
-            )
-        ]
+        [ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop")]
     )
 
     result = run_cli(
         "agent",
-        "My goal is to build a portfolio-ready agent.",
+        "How does RAG work?",
         "--db",
         str(tmp_path / "empty.db"),
         "--memory-db",
@@ -2275,12 +2466,15 @@ def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
         language_model=model,
     )
 
-    assert result.returncode == 1
-    assert result.stdout == "Route: retrieve (llm)\n"
-    assert "Knowledge base is empty" in result.stderr
-    assert "Traceback" not in result.stderr
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: retrieve (llm)\n"
+        "Insufficient evidence:\n"
+        "The knowledge base does not contain enough evidence.\n"
+    )
+    assert result.stderr == ""
     assert len(model.calls) == 1
-    assert not memory_database.exists()
+    assert memory_database.exists()
 
 
 def test_agent_requires_api_key_without_exposing_traceback(tmp_path: Path) -> None:

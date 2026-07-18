@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from personal_knowledge_agent.domain.errors import InvalidQueryError
-from personal_knowledge_agent.domain.memory import MemoryRecallReport
 from personal_knowledge_agent.domain.models import (
     AgentResponse,
     DirectIntent,
@@ -64,8 +63,7 @@ class AgentService:
         self,
         router: QuestionRouter,
         answer_service: GroundedQuestionAnswerer,
-        memory_answerer_factory: Callable[[], MemoryAwareQuestionAnswerer]
-        | None = None,
+        memory_answerer_factory: Callable[[], MemoryAwareQuestionAnswerer],
     ) -> None:
         self._router = router
         self._answer_service = answer_service
@@ -103,21 +101,6 @@ class AgentService:
                 mode=mode,
             )
             return AgentResponse(route, None, grounded_answer)
-
-        # Task 9 removes this compatibility branch after the CLI supplies the
-        # lazy memory-aware composition root.
-        if self._memory_answerer_factory is None:
-            grounded_answer = self._answer_service.answer(
-                question,
-                limit=limit,
-                mode=mode,
-            )
-            return AgentResponse(
-                route,
-                None,
-                grounded_answer,
-                MemoryRecallReport((), ()),
-            )
 
         result = self._memory_answerer_factory().answer(
             question,
