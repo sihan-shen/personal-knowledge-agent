@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import fsum, isfinite, log
+from math import fsum, isfinite, log, sqrt
 from pathlib import Path
 
 from personal_knowledge_agent.domain.errors import (
@@ -691,6 +691,9 @@ class SQLiteMemoryStore:
 
         scores: dict[str, float] = {}
         query_dimensions = len(query_embedding.values)
+        query_magnitude = sqrt(fsum(value * value for value in query_embedding.values))
+        if query_magnitude == 0.0:
+            raise EmbeddingError("Query embedding must have nonzero magnitude")
         for row in rows:
             memory_id = self._require_stored_memory_id(row, "memory_id")
             model_id = row["model_id"]
@@ -710,7 +713,12 @@ class SQLiteMemoryStore:
             if not isinstance(vector_value, (bytes, bytearray, memoryview)):
                 raise MemoryStorageError("Stored memory embedding vector is not a BLOB")
             vector = _unpack_vector(bytes(vector_value), dimensions=dimensions)
-            score = fsum(
+            stored_magnitude = sqrt(fsum(value * value for value in vector))
+            if stored_magnitude == 0.0:
+                raise MemoryStorageError(
+                    "Stored memory embedding must have nonzero magnitude"
+                )
+            dot_product = fsum(
                 query_value * stored_value
                 for query_value, stored_value in zip(
                     query_embedding.values,
@@ -718,6 +726,8 @@ class SQLiteMemoryStore:
                     strict=True,
                 )
             )
+            score = dot_product / (query_magnitude * stored_magnitude)
+            score = max(-1.0, min(1.0, score))
             scores[memory_id] = score
 
         ranked = sorted(

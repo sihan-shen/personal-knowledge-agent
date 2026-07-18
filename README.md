@@ -226,7 +226,8 @@ Memories used:
 
 Only cited context is displayed, and empty `Sources` or `Memories used` sections are
 omitted. Recall failures degrade to document-only RAG with fixed labels such as
-`embedding error`, `storage error`, `unsafe memory`, or `ambiguous memory slot`;
+`embedding error`, `storage error`, `unsafe stored memory`, or
+`ambiguous memory slot`;
 private exception details are not printed. With neither documents nor accepted
 memories, the Agent returns a local insufficient-evidence response without an answer
 model call.

@@ -109,7 +109,7 @@ Phase 3B handles a slot atomically. Every active peer is safety-checked and the
 complete slot must fit the three-memory budget. If only one position remains for two
 peers, neither is included. More than three peers yields an
 `ambiguous memory slot` warning. One unsafe peer omits the entire slot and yields an
-`unsafe memory` warning.
+`unsafe stored memory` warning.
 
 This trades some recall for honest conflict representation. The model may explain
 two supplied alternatives, but the retrieval layer never silently chooses one.
@@ -123,7 +123,7 @@ refuses locally and makes no answer-model request.
 
 ```text
 Route: retrieve (llm)
-Memory recall warning: storage error
+Memory recall skipped: storage error
 Answer:
 ... [S1]
 ```

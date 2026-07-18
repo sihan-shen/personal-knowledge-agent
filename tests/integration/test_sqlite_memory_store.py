@@ -545,6 +545,20 @@ def test_search_orders_only_positive_cosine_candidates(tmp_path: Path) -> None:
     assert embedder.query_calls == ["semantic question"]
 
 
+def test_search_bounds_cosine_after_high_dimensional_float32_storage(
+    tmp_path: Path,
+) -> None:
+    values = (1.0,) * 100
+    embedder = FakeEmbedder({"same memory": values, "same query": values})
+    store = make_store(tmp_path / "memory.db", embedder=embedder)
+    memory = store.remember(MemoryType.GOAL, "goal.same", "same memory")
+
+    results = store.search("same query")
+
+    assert [result.memory for result in results] == [memory]
+    assert results[0].semantic_similarity == pytest.approx(1.0)
+
+
 def test_search_breaks_equal_rankings_by_memory_id(tmp_path: Path) -> None:
     database = tmp_path / "memory.db"
     embedder = FakeEmbedder(

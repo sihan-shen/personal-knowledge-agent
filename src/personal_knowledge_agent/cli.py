@@ -96,7 +96,7 @@ _VISIBLE_MEMORY_SKIP_LABELS = {
 _MEMORY_RECALL_WARNING_LABELS = {
     MemoryRecallWarning.EMBEDDING_ERROR: "embedding error",
     MemoryRecallWarning.STORAGE_ERROR: "storage error",
-    MemoryRecallWarning.UNSAFE_MEMORY: "unsafe memory",
+    MemoryRecallWarning.UNSAFE_MEMORY: "unsafe stored memory",
     MemoryRecallWarning.AMBIGUOUS_MEMORY_SLOT: "ambiguous memory slot",
 }
 
@@ -551,7 +551,7 @@ def _print_agent_answer(response: AgentResponse) -> None:
 def _print_memory_recall_warnings(report: MemoryRecallReport) -> None:
     for warning in MemoryRecallWarning:
         if warning in report.warnings:
-            print(f"Memory recall warning: {_MEMORY_RECALL_WARNING_LABELS[warning]}")
+            print(f"Memory recall skipped: {_MEMORY_RECALL_WARNING_LABELS[warning]}")
 
 
 def _print_contextual_answer(

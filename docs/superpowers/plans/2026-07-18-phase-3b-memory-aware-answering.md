@@ -818,6 +818,36 @@ exposes a real gap, use `systematic-debugging`, record the root cause, and add a
 explicit fix subtask to this plan with the exact production path, failing assertion,
 minimal patch, and GREEN command before editing production code.
 
+#### Verified fix subtask: reject hidden malformed body citations
+
+The merge review found that
+`infrastructure/structured_contextual_answer_parser.py` extracts only already-valid
+positive labels. A body containing valid `[M1]` plus malformed `[M0]`, `[S01]`, or
+`[M-1]` can therefore match `citation_ids=["M1"]` and bypass validation. Add failing
+cases to `tests/unit/test_structured_contextual_answer_parser.py`, then scan every
+bracketed token beginning with `S` or `M`, require the complete token to match
+`(?:S|M)[1-9]\d*`, and only then apply the existing first-use order and membership
+checks. Run the focused parser file, both answer-parser files, and the full quality
+gate before committing the fix.
+
+#### Review alignment subtask: preserve the approved warning text contract
+
+The merge review also confirmed that the implemented `Memory recall warning:` prefix
+and `unsafe memory` label differ from the approved failure matrix. Update CLI tests
+first to require `Memory recall skipped:` and `unsafe stored memory`, then align
+`cli.py`, README, and the Phase 3B learning log. Run focused CLI tests before the
+full quality gate.
+
+#### Review robustness subtask: compute bounded cosine after float32 storage
+
+The merge review noted that a raw dot product between a float64 query vector and a
+float32 stored vector can drift outside `[-1, 1]`. A 100-dimensional identical unit
+vector reproduces `1.0000000149`, causing a valid search to become a storage error.
+Add an integration regression in `tests/integration/test_sqlite_memory_store.py`,
+then compute cosine with both norms in `sqlite_memory_store.py`, reject zero stored
+norms as corrupt data, and clamp only the final floating-point boundary noise. Run
+the focused integration file and full quality gate.
+
 - [ ] **Step 4: Run the combined Phase 2/3 integration gate**
 
 Run the full CLI file, SQLite memory integration, all memory unit files, Agent,

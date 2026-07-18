@@ -19,7 +19,8 @@ from personal_knowledge_agent.domain.models import (
 )
 
 _REQUIRED_FIELDS = {"status", "answer", "citation_ids"}
-_CITATION_PATTERN = re.compile(r"\[((?:S|M)[1-9]\d*)\]")
+_CITATION_LIKE_PATTERN = re.compile(r"\[((?:S|M)[^\[\]]*)\]")
+_VALID_CITATION_ID_PATTERN = re.compile(r"(?:S|M)[1-9]\d*")
 
 
 def parse_contextual_answer(
@@ -54,7 +55,20 @@ def parse_contextual_answer(
         ) from error
 
     citation_ids = tuple(citation_values)
-    body_citations = tuple(dict.fromkeys(_CITATION_PATTERN.findall(answer)))
+    body_labels = _CITATION_LIKE_PATTERN.findall(answer)
+    malformed = next(
+        (
+            item
+            for item in body_labels
+            if _VALID_CITATION_ID_PATTERN.fullmatch(item) is None
+        ),
+        None,
+    )
+    if malformed is not None:
+        raise InvalidCitationError(
+            f"Answer contains malformed citation marker: [{malformed}]"
+        )
+    body_citations = tuple(dict.fromkeys(body_labels))
     if status is AnswerStatus.INSUFFICIENT_EVIDENCE:
         if citation_ids or body_citations:
             raise InvalidCitationError(

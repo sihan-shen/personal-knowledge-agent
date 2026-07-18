@@ -1458,7 +1458,7 @@ def test_agent_does_not_display_supplied_but_uncited_memory(tmp_path: Path) -> N
 @pytest.mark.parametrize(
     ("warning", "label"),
     [
-        (MemoryRecallWarning.UNSAFE_MEMORY, "unsafe memory"),
+        (MemoryRecallWarning.UNSAFE_MEMORY, "unsafe stored memory"),
         (MemoryRecallWarning.AMBIGUOUS_MEMORY_SLOT, "ambiguous memory slot"),
     ],
 )
@@ -1495,9 +1495,9 @@ def test_agent_displays_safe_policy_recall_warning_once(
         )
 
     assert result.returncode == 0
-    assert result.stdout.count(f"Memory recall warning: {label}\n") == 1
+    assert result.stdout.count(f"Memory recall skipped: {label}\n") == 1
     assert result.stdout.startswith(
-        f"Route: retrieve (llm)\nMemory recall warning: {label}\nAnswer:\n"
+        f"Route: retrieve (llm)\nMemory recall skipped: {label}\nAnswer:\n"
     )
 
 
@@ -1588,7 +1588,7 @@ def test_agent_recall_failure_without_documents_refuses_without_answer_call(
 
     assert result.returncode == 0
     assert result.stdout == (
-        f"Route: retrieve (llm)\nMemory recall warning: {label}\n"
+        f"Route: retrieve (llm)\nMemory recall skipped: {label}\n"
         "Insufficient evidence:\n"
         "The knowledge base does not contain enough evidence.\n"
     )
@@ -2250,7 +2250,7 @@ def test_agent_memory_dependency_construction_failure_keeps_answer(
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.startswith(
-        f"Route: retrieve (llm)\nMemory recall warning: {safe_category}\n"
+        f"Route: retrieve (llm)\nMemory recall skipped: {safe_category}\n"
         "Answer:\nGrounded. [S1]\n"
     )
     assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")

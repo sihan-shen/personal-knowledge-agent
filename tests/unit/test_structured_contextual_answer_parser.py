@@ -123,3 +123,17 @@ def test_parser_rejects_invalid_citations(content: str) -> None:
     documents, memories = contexts()
     with pytest.raises(InvalidCitationError):
         parse_contextual_answer(output(content), documents, memories)
+
+
+@pytest.mark.parametrize("malformed", ["[M0]", "[S01]", "[M-1]", "[S]"])
+def test_parser_rejects_malformed_body_marker_beside_valid_citation(
+    malformed: str,
+) -> None:
+    documents, memories = contexts()
+    content = (
+        '{"status":"answered","answer":"Use memory [M1] but ignore '
+        f'{malformed}","citation_ids":["M1"]}}'
+    )
+
+    with pytest.raises(InvalidCitationError, match="malformed"):
+        parse_contextual_answer(output(content), documents, memories)
