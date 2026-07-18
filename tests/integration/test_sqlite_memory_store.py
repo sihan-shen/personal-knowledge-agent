@@ -82,6 +82,19 @@ class WrongModelIdEmbedder(WrongCountEmbedder):
         return [Embedding("different-model", (1.0,)) for _ in texts]
 
 
+class ZeroQueryEmbedder:
+    @property
+    def model_id(self) -> str:
+        return "zero-query"
+
+    def embed_documents(self, texts: Sequence[str]) -> list[Embedding]:
+        return [Embedding(self.model_id, (1.0, 0.0)) for _ in texts]
+
+    def embed_query(self, query: str) -> Embedding:
+        del query
+        return Embedding(self.model_id, (0.0, 0.0))
+
+
 def read_rows(
     database: Path,
     query: str,
@@ -557,6 +570,31 @@ def test_search_bounds_cosine_after_high_dimensional_float32_storage(
 
     assert [result.memory for result in results] == [memory]
     assert results[0].semantic_similarity == pytest.approx(1.0)
+
+
+def test_search_rejects_zero_magnitude_query_embedding(tmp_path: Path) -> None:
+    store = make_store(tmp_path / "memory.db", embedder=ZeroQueryEmbedder())
+    store.remember(MemoryType.GOAL, "goal.agent", "Build an agent")
+
+    with pytest.raises(EmbeddingError, match="nonzero magnitude"):
+        store.search("agent")
+
+
+def test_search_maps_zero_magnitude_stored_embedding_to_storage_error(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder({}, default_vector=(1.0, 0.0))
+    store = make_store(database, embedder=embedder)
+    store.remember(MemoryType.GOAL, "goal.agent", "Build an agent")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE memory_embeddings SET vector = ?",
+            (struct.pack("<2f", 0.0, 0.0),),
+        )
+
+    with pytest.raises(MemoryStorageError, match="nonzero magnitude"):
+        store.search("agent")
 
 
 def test_search_breaks_equal_rankings_by_memory_id(tmp_path: Path) -> None:
