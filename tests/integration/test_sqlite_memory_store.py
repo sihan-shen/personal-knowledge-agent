@@ -1237,6 +1237,7 @@ def test_pending_filter_maps_corrupt_live_hash_to_safe_storage_error(
             "UPDATE memories SET content_hash = ?",
             ("private-invalid-hash",),
         )
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError) as captured:
         store.create_pending(
@@ -1245,7 +1246,7 @@ def test_pending_filter_maps_corrupt_live_hash_to_safe_storage_error(
         )
 
     assert "private" not in str(captured.value)
-    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(1,)]
+    assert snapshot_memory_tables(database) == before
 
 
 def test_pending_filter_maps_mismatched_live_content_hash_to_safe_storage_error(
@@ -1260,6 +1261,7 @@ def test_pending_filter_maps_mismatched_live_content_hash_to_safe_storage_error(
             "UPDATE memories SET content_hash = ?",
             (memory_content_hash("different content"),),
         )
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError) as captured:
         store.create_pending(
@@ -1268,7 +1270,7 @@ def test_pending_filter_maps_mismatched_live_content_hash_to_safe_storage_error(
         )
 
     assert secret not in str(captured.value)
-    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(1,)]
+    assert snapshot_memory_tables(database) == before
 
 
 def test_activation_maps_corrupt_conflict_id_to_safe_storage_error(
@@ -1282,12 +1284,13 @@ def test_activation_maps_corrupt_conflict_id_to_safe_storage_error(
             "UPDATE memories SET memory_id = ?",
             ("private-invalid-id",),
         )
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError) as captured:
         store.remember(MemoryType.GOAL, "goal.agent", "Second goal")
 
     assert "private" not in str(captured.value)
-    assert read_rows(database, "SELECT status FROM memories") == [("active",)]
+    assert snapshot_memory_tables(database) == before
 
 
 def test_schema_initialization_rolls_back_partial_creation(tmp_path: Path) -> None:

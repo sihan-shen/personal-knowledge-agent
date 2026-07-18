@@ -967,9 +967,10 @@ def test_memory_invalid_unsafe_unknown_and_conflicting_operations_are_safe(
         )
 
         assert result.returncode == 1, case_name
+        assert result.stdout == "", case_name
         assert result.stderr.startswith("error: "), case_name
         assert "Traceback" not in result.stderr, case_name
-        assert "do-not-store-this" not in result.stderr, case_name
+        assert "do-not-store-this" not in result.stdout + result.stderr, case_name
 
 
 @pytest.mark.parametrize(
@@ -1276,6 +1277,7 @@ def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(
         "\nSources:\n"
         f"[S1] {document.resolve()} > RAG\n"
     )
+    assert result.stderr == ""
     assert len(model.calls) == 2
     assert not memory_database.exists()
 
@@ -1520,7 +1522,7 @@ def test_agent_local_memory_guards_skip_before_extraction_call(
     assert result.stderr == ""
     assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
     assert len(model.calls) == 2
-    assert "sk-provider-secret-123456789" not in result.stdout
+    assert "sk-provider-secret-123456789" not in result.stdout + result.stderr
     assert not memory_database.exists()
 
 
@@ -1720,11 +1722,13 @@ def test_agent_embedding_failure_keeps_answer_and_hides_private_values(
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
     assert result.stdout.endswith("\nMemory extraction skipped: embedding error\n")
-    assert private_content not in result.stdout
-    assert "goal.private" not in result.stdout
-    assert "(1.0, 0.0)" not in result.stdout
-    assert "Traceback" not in result.stdout
+    process_output = result.stdout + result.stderr
+    assert private_content not in process_output
+    assert "goal.private" not in process_output
+    assert "(1.0, 0.0)" not in process_output
+    assert "Traceback" not in process_output
 
 
 def test_agent_storage_failure_keeps_answer_and_hides_private_values(
@@ -1778,11 +1782,13 @@ def test_agent_storage_failure_keeps_answer_and_hides_private_values(
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
     assert result.stdout.endswith("\nMemory extraction skipped: storage error\n")
-    assert "sqlite-body-private" not in result.stdout
-    assert "PRIVATE-STORAGE-CANDIDATE" not in result.stdout
-    assert "(1.0, 0.0)" not in result.stdout
-    assert "Traceback" not in result.stdout
+    process_output = result.stdout + result.stderr
+    assert "sqlite-body-private" not in process_output
+    assert "PRIVATE-STORAGE-CANDIDATE" not in process_output
+    assert "(1.0, 0.0)" not in process_output
+    assert "Traceback" not in process_output
 
 
 @pytest.mark.parametrize(
@@ -1891,11 +1897,13 @@ def test_agent_conflict_lookup_storage_failure_prints_only_safe_category(
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
     assert result.stdout.endswith("\nMemory extraction skipped: storage error\n")
-    assert "Memory candidates:" not in result.stdout
-    assert "Build an agent." not in result.stdout
-    assert "conflict-query-private" not in result.stdout
-    assert "Traceback" not in result.stdout
+    process_output = result.stdout + result.stderr
+    assert "Memory candidates:" not in process_output
+    assert "Build an agent." not in process_output
+    assert "conflict-query-private" not in process_output
+    assert "Traceback" not in process_output
 
 
 def test_agent_unexpected_memory_exception_remains_visible_to_tests(
