@@ -538,9 +538,16 @@ class SQLiteMemoryStore:
                 rows = connection.execute(
                     "SELECT singleton, version FROM schema_metadata"
                 ).fetchall()
-                if len(rows) != 1 or int(rows[0]["singleton"]) != 1:
+                if len(rows) != 1:
                     raise MemoryStorageError("Memory schema metadata is invalid")
-                version = int(rows[0]["version"])
+                singleton = rows[0]["singleton"]
+                version = rows[0]["version"]
+                if (
+                    type(singleton) is not int
+                    or singleton != 1
+                    or type(version) is not int
+                ):
+                    raise MemoryStorageError("Memory schema metadata is invalid")
                 if version != _SCHEMA_VERSION:
                     raise MemoryStorageError(
                         f"Unsupported memory schema version {version}; "
@@ -606,14 +613,17 @@ class SQLiteMemoryStore:
     ) -> tuple[MemoryProposal, ...]:
         live: set[tuple[str, str, str]] = set()
         for row in connection.execute(
-            "SELECT memory_type, memory_key, content_hash FROM memories "
+            "SELECT memory_type, memory_key, content, content_hash FROM memories "
             "WHERE status IN ('pending', 'active')"
         ).fetchall():
             memory_type = MemoryType(cls._require_stored_str(row, "memory_type"))
             memory_key = cls._require_stored_str(row, "memory_key")
             if _MEMORY_KEY_PATTERN.fullmatch(memory_key) is None:
                 raise ValueError("stored memory_key is invalid")
+            content = cls._require_stored_str(row, "content")
             content_hash = cls._require_stored_hash(row, "content_hash")
+            if content_hash != memory_content_hash(content):
+                raise ValueError("stored content_hash does not match content")
             live.add((memory_type.value, memory_key, content_hash))
 
         rejected = {

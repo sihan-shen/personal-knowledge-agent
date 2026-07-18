@@ -824,6 +824,32 @@ def test_rejects_unsupported_schema_version_without_data_leakage(
         make_store(database)
 
 
+@pytest.mark.parametrize(
+    ("singleton", "version"),
+    [
+        (1.5, 1),
+        (1, 1.5),
+        ("1", 1),
+        (1, "1"),
+    ],
+)
+def test_rejects_noninteger_schema_metadata_values(
+    tmp_path: Path,
+    singleton: object,
+    version: object,
+) -> None:
+    database = tmp_path / "memory.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE schema_metadata(singleton, version)")
+        connection.execute(
+            "INSERT INTO schema_metadata(singleton, version) VALUES (?, ?)",
+            (singleton, version),
+        )
+
+    with pytest.raises(MemoryStorageError, match="metadata is invalid"):
+        make_store(database)
+
+
 def test_pending_filter_maps_corrupt_live_hash_to_safe_storage_error(
     tmp_path: Path,
 ) -> None:
@@ -844,6 +870,29 @@ def test_pending_filter_maps_corrupt_live_hash_to_safe_storage_error(
         )
 
     assert "private" not in str(captured.value)
+    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(1,)]
+
+
+def test_pending_filter_maps_mismatched_live_content_hash_to_safe_storage_error(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    store = make_store(database)
+    secret = "private active content"
+    store.remember(MemoryType.GOAL, "goal.agent", secret)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE memories SET content_hash = ?",
+            (memory_content_hash("different content"),),
+        )
+
+    with pytest.raises(MemoryStorageError) as captured:
+        store.create_pending(
+            (MemoryProposal(MemoryType.GOAL, "goal.agent", secret),),
+            source_hash=memory_source_hash("source"),
+        )
+
+    assert secret not in str(captured.value)
     assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(1,)]
 
 
