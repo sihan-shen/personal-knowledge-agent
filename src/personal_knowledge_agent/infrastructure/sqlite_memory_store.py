@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import isfinite
+from math import fsum, isfinite, log
 from pathlib import Path
 
 from personal_knowledge_agent.domain.errors import (
@@ -24,6 +24,7 @@ from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
     MemoryProposal,
     MemoryRecord,
+    MemorySearchResult,
     MemoryStatus,
     MemoryType,
     make_memory_id,
@@ -34,8 +35,13 @@ from personal_knowledge_agent.domain.protocols import EmbeddingModel
 from personal_knowledge_agent.infrastructure.mixed_tokenizer import (
     MixedLanguageTokenizer,
 )
+from personal_knowledge_agent.infrastructure.retrieval_fusion import (
+    reciprocal_rank_scores,
+)
 
 _SCHEMA_VERSION = 1
+_BM25_K1 = 1.5
+_BM25_B = 0.75
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MEMORY_ID_PATTERN = re.compile(r"mem_[0-9a-f]{32}")
 _MEMORY_KEY_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
@@ -519,6 +525,198 @@ class SQLiteMemoryStore:
                 raise MemoryStorageError("Could not list stored memories") from error
             except (TypeError, ValueError, OverflowError) as error:
                 raise MemoryStorageError("Stored memory data is invalid") from error
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        memory_type: MemoryType | None = None,
+    ) -> list[MemorySearchResult]:
+        """Return hybrid-ranked active memories matching a query."""
+        query_tokens = list(dict.fromkeys(self._tokenizer.tokenize(query)))
+        if not query_tokens:
+            raise InvalidMemoryError("Query contains no searchable terms")
+        if not 1 <= limit <= 20:
+            raise InvalidMemoryError("Memory search limit must be between 1 and 20")
+        if memory_type is not None and not isinstance(memory_type, MemoryType):
+            raise InvalidMemoryError("memory_type must be a MemoryType")
+
+        type_clause = " AND m.memory_type = ?" if memory_type is not None else ""
+        type_parameters = [memory_type.value] if memory_type is not None else []
+        with closing(self._open()) as connection:
+            try:
+                connection.execute("BEGIN")
+                statistics = connection.execute(
+                    "SELECT COUNT(*), COALESCE(AVG(m.token_count), 0) "
+                    "FROM memories AS m WHERE m.status = 'active'" + type_clause,
+                    type_parameters,
+                ).fetchone()
+                if statistics is None:
+                    raise MemoryStorageError("Stored memory statistics are invalid")
+                memory_count = int(statistics[0])
+                average_length = float(statistics[1])
+                if memory_count == 0:
+                    return []
+
+                candidate_limit = max(20, limit * 4)
+                lexical_ids = self._lexical_memory_ids(
+                    connection,
+                    query_tokens,
+                    memory_count=memory_count,
+                    average_length=average_length,
+                    memory_type=memory_type,
+                    limit=candidate_limit,
+                )
+                semantic_ids = self._semantic_memory_ids(
+                    connection,
+                    query,
+                    memory_type=memory_type,
+                    limit=candidate_limit,
+                )
+                fused = reciprocal_rank_scores(
+                    lexical_ids,
+                    semantic_ids,
+                    limit=limit,
+                )
+                return [
+                    MemorySearchResult(
+                        memory=self._record_by_id(connection, memory_id),
+                        score=score,
+                    )
+                    for memory_id, score in fused
+                ]
+            except sqlite3.Error as error:
+                raise MemoryStorageError("Could not search stored memories") from error
+            except (TypeError, ValueError, OverflowError) as error:
+                raise MemoryStorageError("Stored memory data is invalid") from error
+
+    def _lexical_memory_ids(
+        self,
+        connection: sqlite3.Connection,
+        query_tokens: list[str],
+        *,
+        memory_count: int,
+        average_length: float,
+        memory_type: MemoryType | None,
+        limit: int,
+    ) -> list[str]:
+        placeholders = ", ".join("?" for _ in query_tokens)
+        type_clause = " AND m.memory_type = ?" if memory_type is not None else ""
+        parameters = [*query_tokens]
+        if memory_type is not None:
+            parameters.append(memory_type.value)
+        rows = connection.execute(
+            f"""
+            SELECT p.token, p.frequency, m.memory_id, m.token_count
+            FROM memory_postings AS p
+            JOIN memories AS m ON m.memory_id = p.memory_id
+            WHERE p.token IN ({placeholders})
+                AND m.status = 'active'
+                {type_clause}
+            """,
+            parameters,
+        ).fetchall()
+        document_frequencies = Counter(
+            self._require_stored_str(row, "token") for row in rows
+        )
+        scores: dict[str, float] = {}
+        safe_average = average_length if average_length > 0 else 1.0
+        for row in rows:
+            token = self._require_stored_str(row, "token")
+            memory_id = self._require_stored_memory_id(row, "memory_id")
+            frequency = row["frequency"]
+            document_length = row["token_count"]
+            if type(frequency) is not int or frequency <= 0:
+                raise MemoryStorageError("Stored memory posting frequency is invalid")
+            if type(document_length) is not int or document_length < 0:
+                raise MemoryStorageError("Stored memory token count is invalid")
+            document_frequency = document_frequencies[token]
+            inverse_frequency = log(
+                1
+                + (memory_count - document_frequency + 0.5) / (document_frequency + 0.5)
+            )
+            denominator = frequency + _BM25_K1 * (
+                1 - _BM25_B + _BM25_B * document_length / safe_average
+            )
+            scores[memory_id] = scores.get(memory_id, 0.0) + (
+                inverse_frequency * frequency * (_BM25_K1 + 1) / denominator
+            )
+
+        return [
+            memory_id
+            for memory_id, score in sorted(
+                scores.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:limit]
+            if score > 0
+        ]
+
+    def _semantic_memory_ids(
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        *,
+        memory_type: MemoryType | None,
+        limit: int,
+    ) -> list[str]:
+        query_embedding = self._embedding_model.embed_query(query)
+        if query_embedding.model_id != self._embedding_model.model_id:
+            raise EmbeddingError(
+                "Query embedding model identifier does not match configured model"
+            )
+
+        type_clause = " AND m.memory_type = ?" if memory_type is not None else ""
+        parameters = [memory_type.value] if memory_type is not None else []
+        rows = connection.execute(
+            """
+            SELECT
+                m.memory_id,
+                e.model_id,
+                e.dimensions,
+                e.vector
+            FROM memories AS m
+            LEFT JOIN memory_embeddings AS e ON e.memory_id = m.memory_id
+            WHERE m.status = 'active'
+            """
+            + type_clause,
+            parameters,
+        ).fetchall()
+
+        ranked: list[tuple[str, float]] = []
+        query_dimensions = len(query_embedding.values)
+        for row in rows:
+            memory_id = self._require_stored_memory_id(row, "memory_id")
+            model_id = row["model_id"]
+            if (
+                not isinstance(model_id, str)
+                or model_id != self._embedding_model.model_id
+            ):
+                raise MemoryStorageError(
+                    "Stored memory embedding model is incompatible"
+                )
+            dimensions = row["dimensions"]
+            if type(dimensions) is not int or dimensions != query_dimensions:
+                raise MemoryStorageError(
+                    "Stored memory embedding dimension is incompatible"
+                )
+            vector_value = row["vector"]
+            if not isinstance(vector_value, (bytes, bytearray, memoryview)):
+                raise MemoryStorageError("Stored memory embedding vector is not a BLOB")
+            vector = _unpack_vector(bytes(vector_value), dimensions=dimensions)
+            score = fsum(
+                query_value * stored_value
+                for query_value, stored_value in zip(
+                    query_embedding.values,
+                    vector,
+                    strict=True,
+                )
+            )
+            if score > 0:
+                ranked.append((memory_id, score))
+
+        ranked.sort(key=lambda item: (-item[1], item[0]))
+        return [memory_id for memory_id, _ in ranked[:limit]]
 
     def _initialize_schema(self) -> None:
         with closing(self._open()) as connection:

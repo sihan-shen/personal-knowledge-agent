@@ -406,6 +406,292 @@ def test_list_maps_corrupt_rows_to_safe_storage_error(tmp_path: Path) -> None:
     assert secret not in str(captured.value)
 
 
+def test_search_ranks_higher_bm25_term_frequency(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "Python Python Python notes": (0.0, 1.0),
+            "Python notes notes notes": (0.0, 1.0),
+            "python": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    frequent = store.remember(
+        MemoryType.LEARNING_PROGRESS,
+        "learning.python",
+        "Python Python Python notes",
+    )
+    occasional = store.remember(
+        MemoryType.LEARNING_PROGRESS,
+        "learning.notes",
+        "Python notes notes notes",
+    )
+
+    results = store.search("python")
+
+    assert [result.memory.memory_id for result in results] == [
+        frequent.memory_id,
+        occasional.memory_id,
+    ]
+    assert [result.score for result in results] == pytest.approx([1 / 61, 1 / 62])
+
+
+def test_search_supports_chinese_and_mixed_language_terms(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "正在学习 RAG 检索": (0.0, 1.0),
+            "RAG 检索": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    memory = store.remember(
+        MemoryType.LEARNING_PROGRESS,
+        "learning.rag",
+        "正在学习 RAG 检索",
+    )
+
+    results = store.search("RAG 检索")
+
+    assert [result.memory for result in results] == [memory]
+
+
+def test_search_orders_only_positive_cosine_candidates(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "closest": (1.0, 0.0),
+            "partial": (1.0, 1.0),
+            "opposite": (-1.0, 0.0),
+            "semantic question": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    closest = store.remember(MemoryType.GOAL, "goal.closest", "closest")
+    partial = store.remember(MemoryType.GOAL, "goal.partial", "partial")
+    store.remember(MemoryType.GOAL, "goal.opposite", "opposite")
+
+    results = store.search("semantic question")
+
+    assert [result.memory.memory_id for result in results] == [
+        closest.memory_id,
+        partial.memory_id,
+    ]
+    assert [result.score for result in results] == pytest.approx([1 / 61, 1 / 62])
+    assert embedder.query_calls == ["semantic question"]
+
+
+def test_search_breaks_equal_rankings_by_memory_id(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "same first": (1.0, 0.0),
+            "same second": (1.0, 0.0),
+            "same query": (1.0, 0.0),
+        }
+    )
+    store = make_store(
+        database,
+        embedder=embedder,
+        ids=(_SECOND_ID, _FIRST_ID),
+    )
+    created = [
+        store.remember(MemoryType.GOAL, "goal.first", "same first"),
+        store.remember(MemoryType.GOAL, "goal.second", "same second"),
+    ]
+
+    results = store.search("same query")
+
+    assert [result.memory.memory_id for result in results] == sorted(
+        memory.memory_id for memory in created
+    )
+
+
+def test_search_fuses_lexical_and_semantic_rankings_by_memory_id(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "hybrid hybrid hybrid": (0.0, 1.0),
+            "semantic only": (1.0, 0.0),
+            "hybrid shared": (1.0, 1.0),
+            "hybrid question": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    lexical_first = store.remember(
+        MemoryType.PROJECT,
+        "project.lexical",
+        "hybrid hybrid hybrid",
+    )
+    semantic_first = store.remember(
+        MemoryType.PROJECT,
+        "project.semantic",
+        "semantic only",
+    )
+    shared = store.remember(
+        MemoryType.PROJECT,
+        "project.shared",
+        "hybrid shared",
+    )
+
+    results = store.search("hybrid question")
+
+    assert results[0].memory == shared
+    assert {result.memory for result in results[1:]} == {
+        lexical_first,
+        semantic_first,
+    }
+    assert results[0].score == pytest.approx(2 / 62)
+    assert results[1].score == pytest.approx(1 / 61)
+
+
+@pytest.mark.parametrize("limit", [0, 21])
+def test_search_rejects_limits_outside_supported_range(
+    tmp_path: Path,
+    limit: int,
+) -> None:
+    store = make_store(tmp_path / "memory.db")
+
+    with pytest.raises(InvalidMemoryError, match="between 1 and 20"):
+        store.search("memory", limit=limit)
+
+
+def test_search_applies_limit_and_optional_type_filter(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder({}, default_vector=(1.0, 0.0))
+    store = make_store(database, embedder=embedder)
+    goal = store.remember(MemoryType.GOAL, "goal.agent", "shared memory goal")
+    store.remember(MemoryType.PROJECT, "project.rag", "shared memory project")
+    store.remember(
+        MemoryType.LEARNING_PROGRESS,
+        "learning.rag",
+        "shared memory learning",
+    )
+
+    filtered = store.search("shared memory", limit=20, memory_type=MemoryType.GOAL)
+    limited = store.search("shared memory", limit=1)
+
+    assert [result.memory for result in filtered] == [goal]
+    assert len(limited) == 1
+
+
+def test_search_persists_after_reopening(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "Persistent memory": (1.0, 0.0),
+            "persistent": (1.0, 0.0),
+        }
+    )
+    expected = make_store(database, embedder=embedder).remember(
+        MemoryType.PROJECT,
+        "project.persistent",
+        "Persistent memory",
+    )
+
+    results = make_store(database, embedder=embedder, ids=(_SECOND_ID,)).search(
+        "persistent"
+    )
+
+    assert [result.memory for result in results] == [expected]
+
+
+def test_search_returns_empty_without_embedding_when_no_active_memory(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder(
+        {
+            "Pending memory": (1.0, 0.0),
+            "Active project": (1.0, 0.0),
+            "memory": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    store.create_pending(
+        (MemoryProposal(MemoryType.GOAL, "goal.pending", "Pending memory"),),
+        source_hash=memory_source_hash("source"),
+    )
+
+    assert store.search("memory") == []
+    assert embedder.query_calls == []
+
+    store.remember(MemoryType.PROJECT, "project.active", "Active project")
+
+    assert store.search("memory", memory_type=MemoryType.GOAL) == []
+    assert embedder.query_calls == []
+
+
+def test_search_rejects_query_without_searchable_terms(tmp_path: Path) -> None:
+    embedder = FakeEmbedder({})
+    store = make_store(tmp_path / "memory.db", embedder=embedder)
+
+    with pytest.raises(InvalidMemoryError, match="searchable terms"):
+        store.search("，。！？")
+
+    assert embedder.query_calls == []
+
+
+def test_search_never_returns_pending_or_superseded_memories(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    embedder = FakeEmbedder({}, default_vector=(1.0, 0.0))
+    store = make_store(database, embedder=embedder)
+    old = store.remember(MemoryType.GOAL, "goal.agent", "Old hidden memory")
+    active = store.remember(
+        MemoryType.GOAL,
+        "goal.agent",
+        "Current visible memory",
+        action=MemoryActivationAction.REPLACE,
+        replace_id=old.memory_id,
+    )
+    pending = store.create_pending(
+        (MemoryProposal(MemoryType.PROJECT, "project.pending", "Pending memory"),),
+        source_hash=memory_source_hash("source"),
+    )[0]
+
+    results = store.search("memory")
+
+    assert [result.memory for result in results] == [active]
+    assert {old.memory_id, pending.memory_id}.isdisjoint(
+        result.memory.memory_id for result in results
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "parameters"),
+    [
+        ("UPDATE memory_embeddings SET model_id = ?", ("private-old-model",)),
+        ("UPDATE memory_embeddings SET dimensions = ?", (3,)),
+        ("UPDATE memory_embeddings SET vector = ?", ("private-not-a-blob",)),
+        ("UPDATE memory_embeddings SET vector = ?", (b"private",)),
+    ],
+)
+def test_search_maps_corrupt_embedding_metadata_to_safe_storage_error(
+    tmp_path: Path,
+    mutation: str,
+    parameters: tuple[object, ...],
+) -> None:
+    database = tmp_path / "memory.db"
+    secret = "private memory content"
+    embedder = FakeEmbedder(
+        {
+            secret: (1.0, 0.0),
+            "memory": (1.0, 0.0),
+        }
+    )
+    store = make_store(database, embedder=embedder)
+    store.remember(MemoryType.GOAL, "goal.secret", secret)
+    with sqlite3.connect(database) as connection:
+        connection.execute(mutation, parameters)
+
+    with pytest.raises(MemoryStorageError) as captured:
+        store.search("memory")
+
+    assert "private" not in str(captured.value)
+
+
 def test_approves_pending_candidate_without_conflict(tmp_path: Path) -> None:
     database = tmp_path / "memory.db"
     approved_at = _FIXED_TIME + timedelta(minutes=1)
