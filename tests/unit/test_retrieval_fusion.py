@@ -5,6 +5,7 @@ import pytest
 from personal_knowledge_agent.domain.models import Chunk, SearchResult
 from personal_knowledge_agent.infrastructure.retrieval_fusion import (
     reciprocal_rank_fusion,
+    reciprocal_rank_scores,
 )
 
 
@@ -41,3 +42,14 @@ def test_rrf_does_not_count_duplicate_chunk_twice_in_one_ranking() -> None:
     fused = reciprocal_rank_fusion([duplicate, duplicate], limit=1)
 
     assert fused[0].score == pytest.approx(1 / 61)
+
+
+def test_rrf_scores_stable_ids_for_non_document_consumers() -> None:
+    fused = reciprocal_rank_scores(["mem_a", "mem_b"], ["mem_b", "mem_c"], limit=3)
+
+    assert [memory_id for memory_id, _ in fused] == ["mem_b", "mem_a", "mem_c"]
+    assert fused[0][1] == pytest.approx(1 / 62 + 1 / 61)
+
+
+def test_rrf_id_scores_ignore_duplicates_and_break_ties_by_id() -> None:
+    assert reciprocal_rank_scores(["z", "z"], ["a"], limit=1)[0][0] == "a"
