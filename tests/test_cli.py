@@ -17,8 +17,12 @@ import pytest
 from personal_knowledge_agent.cli import build_parser, main
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
+    InvalidMemoryError,
     LanguageModelError,
+    MemoryConflictError,
+    MemoryNotFoundError,
     MemoryStorageError,
+    UnsafeMemoryError,
 )
 from personal_knowledge_agent.domain.memory import (
     MemoryProposal,
@@ -140,12 +144,15 @@ def test_ingest_and_search_persist_across_processes(tmp_path: Path) -> None:
     )
 
     assert ingested.returncode == 0
-    assert "Indexed 1 chunks" in ingested.stdout
+    assert ingested.stdout == f"Indexed 1 chunks from {document.resolve()}\n"
+    assert ingested.stderr == ""
     assert searched.returncode == 0
-    assert "Search mode: hybrid" in searched.stdout
-    assert "[score=" in searched.stdout
-    assert str(document.resolve()) in searched.stdout
-    assert "RAG > Retrieval" in searched.stdout
+    assert searched.stdout == (
+        "Search mode: hybrid\n"
+        f"1. [score=0.033] {document.resolve()} > RAG > Retrieval\n"
+        "   RAG 使用检索增强生成来选择 relevant evidence.\n"
+    )
+    assert searched.stderr == ""
 
 
 def test_reingest_reports_replacement(tmp_path: Path) -> None:
@@ -965,6 +972,36 @@ def test_memory_invalid_unsafe_unknown_and_conflicting_operations_are_safe(
         assert "do-not-store-this" not in result.stderr, case_name
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        InvalidMemoryError("invalid memory"),
+        UnsafeMemoryError("unsafe memory"),
+        MemoryConflictError("memory conflict"),
+        MemoryNotFoundError("memory not found"),
+        MemoryStorageError("memory storage failed"),
+        EmbeddingError("memory embedding failed"),
+    ],
+)
+def test_every_expected_explicit_memory_error_exits_one_without_traceback(
+    tmp_path: Path,
+    error: Exception,
+) -> None:
+    with patch("personal_knowledge_agent.cli._memory_store", side_effect=error):
+        result = run_cli(
+            "memory",
+            "list",
+            "--memory-db",
+            str(tmp_path / "memory.db"),
+            environment={},
+        )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == f"error: {error}\n"
+    assert "Traceback" not in result.stderr
+
+
 def test_ask_parser_uses_safe_defaults() -> None:
     parsed = build_parser().parse_args(["ask", "question"])
 
@@ -1011,10 +1048,10 @@ def test_ask_returns_grounded_answer_and_only_cited_local_source(
     )
 
     assert result.returncode == 0
-    assert result.stdout.startswith("Answer:\nGrounded answer. [S1]\n")
-    assert "\nSources:\n[S1] " in result.stdout
-    assert result.stdout.count("\n[S") == 1
-    assert "fake-provider-model" not in result.stdout
+    assert result.stdout == (
+        f"Answer:\nGrounded answer. [S1]\n\nSources:\n[S1] {first.resolve()} > RAG\n"
+    )
+    assert result.stderr == ""
 
 
 def test_ask_empty_retrieval_returns_local_refusal_without_model_call(

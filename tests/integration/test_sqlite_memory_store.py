@@ -91,6 +91,21 @@ def read_rows(
         return connection.execute(query, parameters).fetchall()
 
 
+def snapshot_memory_tables(
+    database: Path,
+) -> dict[str, list[tuple[object, ...]]]:
+    """Capture all durable memory table groups for rollback assertions."""
+    return {
+        table: read_rows(database, f"SELECT * FROM {table} ORDER BY rowid")
+        for table in (
+            "memories",
+            "memory_postings",
+            "memory_embeddings",
+            "memory_rejections",
+        )
+    }
+
+
 def make_store(
     database: Path,
     *,
@@ -331,6 +346,7 @@ def test_pending_creation_suppresses_rejected_fingerprints(tmp_path: Path) -> No
 def test_duplicate_ids_roll_back_entire_pending_batch(tmp_path: Path) -> None:
     database = tmp_path / "memory.db"
     store = make_store(database, ids=(_FIRST_ID, _FIRST_ID))
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError):
         store.create_pending(
@@ -341,9 +357,51 @@ def test_duplicate_ids_roll_back_entire_pending_batch(tmp_path: Path) -> None:
             source_hash=memory_source_hash("source"),
         )
 
-    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(0,)]
-    assert read_rows(database, "SELECT COUNT(*) FROM memory_postings") == [(0,)]
-    assert read_rows(database, "SELECT COUNT(*) FROM memory_embeddings") == [(0,)]
+    assert snapshot_memory_tables(database) == before
+
+
+def test_sql_abort_mid_batch_restores_all_memory_table_groups(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+    store = make_store(
+        database,
+        ids=(_FIRST_ID, _SECOND_ID, _THIRD_ID),
+    )
+    store.remember(MemoryType.PROJECT, "project.existing", "Existing project")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO memory_rejections(proposal_hash, rejected_at) VALUES (?, ?)",
+            (
+                memory_proposal_hash(
+                    MemoryType.GOAL,
+                    "goal.rejected",
+                    "Rejected goal",
+                ),
+                _FIXED_TIME.isoformat(),
+            ),
+        )
+        connection.execute(
+            f"""
+            CREATE TRIGGER fail_second_batch_insert
+            BEFORE INSERT ON memories
+            WHEN NEW.memory_id = '{_THIRD_ID}'
+            BEGIN
+                SELECT RAISE(ABORT, 'private mid-batch constraint detail');
+            END
+            """
+        )
+    before = snapshot_memory_tables(database)
+
+    with pytest.raises(MemoryStorageError) as captured:
+        store.create_pending(
+            (
+                MemoryProposal(MemoryType.GOAL, "goal.first", "First goal"),
+                MemoryProposal(MemoryType.GOAL, "goal.second", "Second goal"),
+            ),
+            source_hash=memory_source_hash("source"),
+        )
+
+    assert "private mid-batch constraint detail" not in str(captured.value)
+    assert snapshot_memory_tables(database) == before
 
 
 @pytest.mark.parametrize(
@@ -360,11 +418,12 @@ def test_rejects_incompatible_embedding_batches_before_writing(
 ) -> None:
     database = tmp_path / "memory.db"
     store = make_store(database, embedder=embedder)
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(EmbeddingError, match=message):
         store.remember(MemoryType.GOAL, "goal.agent", "Build an agent")
 
-    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(0,)]
+    assert snapshot_memory_tables(database) == before
 
 
 def test_rejects_mixed_embedding_dimensions_before_writing(tmp_path: Path) -> None:
@@ -376,6 +435,7 @@ def test_rejects_mixed_embedding_dimensions_before_writing(tmp_path: Path) -> No
         }
     )
     store = make_store(database, embedder=embedder)
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(EmbeddingError, match="common dimension"):
         store.create_pending(
@@ -386,7 +446,7 @@ def test_rejects_mixed_embedding_dimensions_before_writing(tmp_path: Path) -> No
             source_hash=memory_source_hash("source"),
         )
 
-    assert read_rows(database, "SELECT COUNT(*) FROM memories") == [(0,)]
+    assert snapshot_memory_tables(database) == before
 
 
 def test_list_maps_corrupt_rows_to_safe_storage_error(tmp_path: Path) -> None:
@@ -937,10 +997,7 @@ def test_duplicate_id_failure_rolls_back_replacement_status_and_children(
     database = tmp_path / "memory.db"
     store = make_store(database, ids=(_FIRST_ID, _FIRST_ID))
     active = store.remember(MemoryType.GOAL, "goal.agent", "First goal")
-    before_postings = read_rows(
-        database,
-        "SELECT token, memory_id, frequency FROM memory_postings ORDER BY token",
-    )
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError):
         store.remember(
@@ -951,15 +1008,8 @@ def test_duplicate_id_failure_rolls_back_replacement_status_and_children(
             replace_id=active.memory_id,
         )
 
+    assert snapshot_memory_tables(database) == before
     assert store.list_memories() == [active]
-    assert (
-        read_rows(
-            database,
-            "SELECT token, memory_id, frequency FROM memory_postings ORDER BY token",
-        )
-        == before_postings
-    )
-    assert read_rows(database, "SELECT COUNT(*) FROM memory_embeddings") == [(1,)]
 
 
 def test_sql_failure_rolls_back_approval_status_changes_without_leaking_details(
@@ -983,6 +1033,7 @@ def test_sql_failure_rolls_back_approval_status_changes_without_leaking_details(
             END
             """
         )
+    before = snapshot_memory_tables(database)
 
     with pytest.raises(MemoryStorageError) as captured:
         store.approve(
@@ -992,16 +1043,49 @@ def test_sql_failure_rolls_back_approval_status_changes_without_leaking_details(
         )
 
     assert "private trigger detail" not in str(captured.value)
+    assert snapshot_memory_tables(database) == before
     by_id = {record.memory_id: record for record in store.list_memories()}
     assert by_id[active.memory_id].status is MemoryStatus.ACTIVE
     assert by_id[pending.memory_id].status is MemoryStatus.PENDING
     assert by_id[pending.memory_id].supersedes_id is None
-    assert read_rows(database, "SELECT COUNT(*) FROM memory_postings") == [(4,)]
-    assert read_rows(database, "SELECT COUNT(*) FROM memory_embeddings") == [(2,)]
 
 
+def test_reopened_store_rejects_stale_replacement_target_without_writes(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    first_store = make_store(database, ids=(_FIRST_ID, _SECOND_ID))
+    stale_target = first_store.remember(
+        MemoryType.GOAL,
+        "goal.agent",
+        "First goal",
+    )
+    first_store.remember(
+        MemoryType.GOAL,
+        "goal.agent",
+        "Current goal",
+        action=MemoryActivationAction.REPLACE,
+        replace_id=stale_target.memory_id,
+    )
+    reopened = make_store(database, ids=(_THIRD_ID,))
+    before = snapshot_memory_tables(database)
+
+    with pytest.raises(MemoryConflictError, match="must be active"):
+        reopened.remember(
+            MemoryType.GOAL,
+            "goal.agent",
+            "Stale replacement attempt",
+            action=MemoryActivationAction.REPLACE,
+            replace_id=stale_target.memory_id,
+        )
+
+    assert snapshot_memory_tables(database) == before
+
+
+@pytest.mark.parametrize("start_position", [0, 1, 2])
 def test_forget_removes_entire_bidirectional_replacement_chain_only(
     tmp_path: Path,
+    start_position: int,
 ) -> None:
     database = tmp_path / "memory.db"
     store = make_store(
@@ -1045,7 +1129,7 @@ def test_forget_removes_entire_bidirectional_replacement_chain_only(
             ),
         )
 
-    removed = store.forget(replacement.memory_id)
+    removed = store.forget(chain[start_position].memory_id)
 
     assert removed == 3
     assert store.list_memories() == [unrelated]
@@ -1075,10 +1159,15 @@ def test_forget_removes_entire_bidirectional_replacement_chain_only(
         ("UPDATE memories SET memory_type = ?", ("private-invalid-type",)),
         ("UPDATE memories SET status = ?", ("private-invalid-status",)),
         ("UPDATE memories SET created_at = ?", ("private-invalid-time",)),
+        ("UPDATE memories SET updated_at = ?", ("2026-07-18T09:30:00",)),
+        ("UPDATE memories SET content_hash = ?", ("private-invalid-hash",)),
+        ("UPDATE memories SET source_hash = ?", (123,)),
+        ("UPDATE memories SET supersedes_id = ?", ("private-invalid-id",)),
+        ("UPDATE memory_embeddings SET vector = ?", ("private-not-a-blob",)),
         ("UPDATE memory_embeddings SET vector = ?", (b"private",)),
     ],
 )
-def test_list_safely_maps_corrupt_ids_enums_timestamps_and_blobs(
+def test_list_safely_maps_corrupt_row_metadata_and_vectors(
     tmp_path: Path,
     mutation: str,
     parameters: tuple[object, ...],
