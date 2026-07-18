@@ -13,10 +13,18 @@ from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.memory_admin import MemoryAdminService
+from personal_knowledge_agent.application.memory_proposal import MemoryProposalService
 from personal_knowledge_agent.application.search import SearchService
-from personal_knowledge_agent.domain.errors import KnowledgeError, MemoryConflictError
+from personal_knowledge_agent.domain.errors import (
+    EmbeddingError,
+    KnowledgeError,
+    MemoryConflictError,
+    MemoryStorageError,
+)
 from personal_knowledge_agent.domain.memory import (
+    MAX_MEMORY_EXTRACTION_INPUT_LENGTH,
     MemoryActivationAction,
+    MemoryExtractionSkipReason,
     MemoryRecord,
     MemorySearchResult,
     MemoryStatus,
@@ -29,6 +37,7 @@ from personal_knowledge_agent.domain.models import (
     RouteAction,
     RouteDecision,
     RouterFallbackReason,
+    RouteSource,
     SearchMode,
     SearchResult,
 )
@@ -36,9 +45,15 @@ from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.hybrid_question_router import (
     HybridQuestionRouter,
 )
+from personal_knowledge_agent.infrastructure.llm_memory_extractor import (
+    LLMMemoryExtractor,
+)
 from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.memory_prefilter import (
+    should_extract_memory,
+)
 from personal_knowledge_agent.infrastructure.memory_safety import (
     LocalMemorySafetyPolicy,
 )
@@ -55,6 +70,19 @@ from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
 _DEFAULT_DATABASE = Path(".pka/knowledge.db")
 _DEFAULT_MEMORY_DATABASE = Path(".pka/memory.db")
 _SNIPPET_LENGTH = 160
+_SILENT_MEMORY_SKIP_REASONS = {
+    MemoryExtractionSkipReason.PREFILTER_MISS,
+    MemoryExtractionSkipReason.NO_NEW_CANDIDATES,
+}
+_VISIBLE_MEMORY_SKIP_LABELS = {
+    MemoryExtractionSkipReason.INPUT_TOO_LONG: "input too long",
+    MemoryExtractionSkipReason.SENSITIVE_INPUT: "sensitive input",
+    MemoryExtractionSkipReason.PROVIDER_ERROR: "provider error",
+    MemoryExtractionSkipReason.INVALID_OUTPUT: "invalid extractor output",
+    MemoryExtractionSkipReason.UNSAFE_OUTPUT: "unsafe extractor output",
+    MemoryExtractionSkipReason.EMBEDDING_ERROR: "embedding error",
+    MemoryExtractionSkipReason.STORAGE_ERROR: "storage error",
+}
 
 
 def _search_limit(value: str) -> int:
@@ -136,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=SearchMode.HYBRID.value,
     )
     agent_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+    _add_memory_database_argument(agent_parser)
 
     memory_parser = subparsers.add_parser(
         "memory",
@@ -490,7 +519,75 @@ def _print_agent_answer(response: AgentResponse) -> None:
     _print_answer(response.grounded_answer)
 
 
-def _agent(query: str, limit: int, mode: SearchMode, database: Path) -> None:
+def _memory_database_suffix(database: Path) -> str:
+    if database == _DEFAULT_MEMORY_DATABASE:
+        return ""
+    return f" {_memory_database_argument(database)}"
+
+
+def _print_memory_candidates(
+    candidates: Sequence[MemoryRecord],
+    memory_service: MemoryAdminService,
+    database: Path,
+) -> None:
+    database_suffix = _memory_database_suffix(database)
+    candidates_with_conflicts = [
+        (
+            candidate,
+            _active_memory_ids(
+                memory_service,
+                candidate.memory_type,
+                candidate.memory_key,
+            ),
+        )
+        for candidate in candidates
+    ]
+    print("\nMemory candidates:")
+    for candidate, active_ids in candidates_with_conflicts:
+        print(_format_memory_record(candidate))
+        if active_ids:
+            print(f"Conflicts with active IDs: {', '.join(active_ids)}")
+        print("Approve with:")
+        for active_id in active_ids:
+            print(
+                f"  pka memory approve {candidate.memory_id} "
+                f"--replace {active_id}{database_suffix}"
+            )
+        if active_ids:
+            print(
+                f"  pka memory approve {candidate.memory_id} "
+                f"--keep-both{database_suffix}"
+            )
+        else:
+            print(f"  pka memory approve {candidate.memory_id}{database_suffix}")
+
+
+def _print_memory_extraction_skip(reason: MemoryExtractionSkipReason) -> None:
+    if reason in _SILENT_MEMORY_SKIP_REASONS:
+        return
+    print(f"\nMemory extraction skipped: {_VISIBLE_MEMORY_SKIP_LABELS[reason]}")
+
+
+def _memory_preflight_skip_reason(
+    query: str,
+    safety_policy: LocalMemorySafetyPolicy,
+) -> MemoryExtractionSkipReason | None:
+    if len(query) > MAX_MEMORY_EXTRACTION_INPUT_LENGTH:
+        return MemoryExtractionSkipReason.INPUT_TOO_LONG
+    if not should_extract_memory(query):
+        return MemoryExtractionSkipReason.PREFILTER_MISS
+    if not safety_policy.allows(query):
+        return MemoryExtractionSkipReason.SENSITIVE_INPUT
+    return None
+
+
+def _agent(
+    query: str,
+    limit: int,
+    mode: SearchMode,
+    database: Path,
+    memory_database: Path,
+) -> None:
     settings = load_llm_settings(os.environ)
     index = SQLiteKeywordIndex(database, E5Embedder())
     language_model = OpenAICompatibleChatModel(
@@ -504,6 +601,34 @@ def _agent(query: str, limit: int, mode: SearchMode, database: Path) -> None:
         answer_service,
     ).respond(query, limit=limit, mode=mode, on_route=_print_route)
     _print_agent_answer(response)
+    if response.route.source is RouteSource.FALLBACK:
+        return
+    safety_policy = LocalMemorySafetyPolicy()
+    preflight_skip_reason = _memory_preflight_skip_reason(query, safety_policy)
+    if preflight_skip_reason is not None:
+        _print_memory_extraction_skip(preflight_skip_reason)
+        return
+    try:
+        memory_store = _memory_store(memory_database)
+        report = MemoryProposalService(
+            LLMMemoryExtractor(language_model),
+            memory_store,
+            safety_policy,
+            should_extract_memory,
+        ).propose(query)
+        if report.candidates:
+            _print_memory_candidates(
+                report.candidates,
+                MemoryAdminService(memory_store, safety_policy),
+                memory_database,
+            )
+        else:
+            assert report.skipped_reason is not None
+            _print_memory_extraction_skip(report.skipped_reason)
+    except EmbeddingError:
+        _print_memory_extraction_skip(MemoryExtractionSkipReason.EMBEDDING_ERROR)
+    except MemoryStorageError:
+        _print_memory_extraction_skip(MemoryExtractionSkipReason.STORAGE_ERROR)
 
 
 def main(arguments: Sequence[str] | None = None) -> None:
@@ -521,7 +646,13 @@ def main(arguments: Sequence[str] | None = None) -> None:
         elif parsed.command == "ask":
             _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
         elif parsed.command == "agent":
-            _agent(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
+            _agent(
+                parsed.query,
+                parsed.limit,
+                SearchMode(parsed.mode),
+                parsed.db,
+                parsed.memory_db,
+            )
         elif parsed.command == "memory":
             memory_type = (
                 MemoryType(parsed.memory_type)

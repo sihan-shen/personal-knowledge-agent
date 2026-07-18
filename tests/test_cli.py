@@ -15,18 +15,27 @@ from unittest.mock import patch
 import pytest
 
 from personal_knowledge_agent.cli import build_parser, main
-from personal_knowledge_agent.domain.errors import LanguageModelError
+from personal_knowledge_agent.domain.errors import (
+    EmbeddingError,
+    LanguageModelError,
+    MemoryStorageError,
+)
 from personal_knowledge_agent.domain.memory import (
     MemoryProposal,
     MemoryType,
     memory_source_hash,
 )
-from personal_knowledge_agent.domain.models import ModelOutput
+from personal_knowledge_agent.domain.models import MessageRole, ModelOutput
 from personal_knowledge_agent.domain.protocols import LanguageModel
 from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
     SQLiteMemoryStore,
 )
-from tests.helpers import FakeEmbedder, FakeLanguageModel, ScriptedLanguageModel
+from tests.helpers import (
+    FakeEmbedder,
+    FakeLanguageModel,
+    FakeMemoryStore,
+    ScriptedLanguageModel,
+)
 
 
 @dataclass(frozen=True)
@@ -39,13 +48,14 @@ class CliResult:
 def run_cli(
     *arguments: str,
     language_model: LanguageModel | None = None,
+    embedder: FakeEmbedder | None = None,
     environment: dict[str, str] | None = None,
 ) -> CliResult:
     """Run the CLI with deterministic embeddings and capture its process contract."""
     stdout = StringIO()
     stderr = StringIO()
     returncode = 0
-    embedder = FakeEmbedder(
+    selected_embedder = embedder or FakeEmbedder(
         {
             "RAG 检索 evidence": (1.0, 0.0),
             "gardening": (0.0, 1.0),
@@ -65,7 +75,7 @@ def run_cli(
     with (
         patch(
             "personal_knowledge_agent.cli.E5Embedder",
-            return_value=embedder,
+            return_value=selected_embedder,
         ),
         patch(
             "personal_knowledge_agent.cli.OpenAICompatibleChatModel",
@@ -1092,6 +1102,17 @@ def test_agent_parser_uses_safe_defaults() -> None:
 
     assert parsed.limit == 5
     assert parsed.mode == "hybrid"
+    assert parsed.memory_db == Path(".pka/memory.db")
+
+
+def test_agent_parser_accepts_explicit_memory_database(tmp_path: Path) -> None:
+    database = tmp_path / "memory.db"
+
+    parsed = build_parser().parse_args(
+        ["agent", "question", "--memory-db", str(database)]
+    )
+
+    assert parsed.memory_db == database
 
 
 @pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
@@ -1173,6 +1194,722 @@ def test_agent_llm_retrieve_displays_route_then_grounded_answer(
     assert len(model.calls) == 2
 
 
+def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    with patch(
+        "personal_knowledge_agent.cli._memory_store",
+        side_effect=AssertionError("memory store must not be constructed"),
+    ):
+        result = run_cli(
+            "agent",
+            "How does RAG work?",
+            "--db",
+            str(database),
+            "--memory-db",
+            str(memory_database),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Route: retrieve (llm)\n"
+        "Answer:\n"
+        "Grounded. [S1]\n"
+        "\nSources:\n"
+        f"[S1] {document.resolve()} > RAG\n"
+    )
+    assert len(model.calls) == 2
+    assert not memory_database.exists()
+
+
+def test_agent_proposes_pending_memory_after_answer_and_keeps_it_out_of_search(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    document = tmp_path / "rag.md"
+    database = tmp_path / "knowledge.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.ai_engineer",'
+                '"content":"Build a portfolio-ready Personal Knowledge Agent."}]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to build a portfolio-ready Personal Knowledge Agent.",
+        "--db",
+        str(database),
+        language_model=model,
+    )
+
+    candidate_match = re.search(r"\[(mem_[0-9a-f]{32})\] pending", result.stdout)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert candidate_match is not None
+    candidate_id = candidate_match.group(1)
+    assert result.stdout == (
+        "Route: retrieve (llm)\n"
+        "Answer:\n"
+        "Grounded. [S1]\n"
+        "\nSources:\n"
+        f"[S1] {document.resolve()} > RAG\n"
+        "\nMemory candidates:\n"
+        f"[{candidate_id}] pending goal goal.ai_engineer\n"
+        "  Build a portfolio-ready Personal Knowledge Agent.\n"
+        "Approve with:\n"
+        f"  pka memory approve {candidate_id}\n"
+    )
+    assert len(model.calls) == 3
+
+    pending = run_cli("memory", "list", "--status", "pending")
+    active_search = run_cli(
+        "memory",
+        "search",
+        "portfolio-ready Personal Knowledge Agent",
+    )
+
+    assert candidate_id in pending.stdout
+    assert "Build a portfolio-ready Personal Knowledge Agent." in pending.stdout
+    assert active_search.stdout == "No active memories found.\n"
+    assert candidate_id not in active_search.stdout
+
+
+def test_agent_candidate_lists_all_conflicts_and_preserves_memory_database(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory db's" / "custom memory.db"
+    quoted_memory_database = shlex.quote(str(memory_database))
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    first = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Become an AI Engineer.",
+        "--memory-db",
+        str(memory_database),
+    )
+    first_match = re.search(r"\[(mem_[0-9a-f]{32})\]", first.stdout)
+    assert first_match is not None
+    first_id = first_match.group(1)
+    second = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "--keep-both",
+        "Publish an AI Engineer portfolio.",
+        "--memory-db",
+        str(memory_database),
+    )
+    second_match = re.search(r"\[(mem_[0-9a-f]{32})\]", second.stdout)
+    assert second_match is not None
+    second_id = second_match.group(1)
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.ai_engineer",'
+                '"content":"Build a portfolio-ready Personal Knowledge Agent."}]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to build a portfolio-ready Personal Knowledge Agent.",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    candidate_match = re.search(r"\[(mem_[0-9a-f]{32})\] pending", result.stdout)
+    assert result.returncode == 0
+    assert candidate_match is not None
+    candidate_id = candidate_match.group(1)
+    assert f"Conflicts with active IDs: {second_id}, {first_id}" in result.stdout
+    assert (
+        f"pka memory approve {candidate_id} --replace {second_id} "
+        f"--memory-db {quoted_memory_database}" in result.stdout
+    )
+    assert (
+        f"pka memory approve {candidate_id} --replace {first_id} "
+        f"--memory-db {quoted_memory_database}" in result.stdout
+    )
+    assert (
+        f"pka memory approve {candidate_id} --keep-both "
+        f"--memory-db {quoted_memory_database}" in result.stdout
+    )
+
+    pending = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(memory_database),
+    )
+    active_search = run_cli(
+        "memory",
+        "search",
+        "portfolio-ready Personal Knowledge Agent",
+        "--memory-db",
+        str(memory_database),
+    )
+
+    assert candidate_id in pending.stdout
+    assert candidate_id not in active_search.stdout
+    assert "Build a portfolio-ready Personal Knowledge Agent." not in (
+        active_search.stdout
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "safe_category"),
+    [
+        ("My goal is " + "x" * 3_990, "input too long"),
+        (
+            "My goal is to keep api_key=sk-provider-secret-123456789.",
+            "sensitive input",
+        ),
+    ],
+    ids=["input-too-long", "sensitive-input"],
+)
+def test_agent_local_memory_guards_skip_before_extraction_call(
+    tmp_path: Path,
+    query: str,
+    safe_category: str,
+) -> None:
+    assert len(query) == 4_001 or safe_category == "sensitive input"
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    with patch(
+        "personal_knowledge_agent.cli._memory_store",
+        side_effect=AssertionError("memory store must not be constructed"),
+    ):
+        result = run_cli(
+            "agent",
+            query,
+            "--mode",
+            "lexical",
+            "--db",
+            str(knowledge_database),
+            "--memory-db",
+            str(memory_database),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
+    assert len(model.calls) == 2
+    assert "sk-provider-secret-123456789" not in result.stdout
+    assert not memory_database.exists()
+
+
+def test_agent_extraction_prompt_contains_only_policy_and_current_message(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    old_memory = "OLD-MEMORY-MUST-NOT-REACH-PROVIDER"
+    knowledge_evidence = "KNOWLEDGE-EVIDENCE-MUST-NOT-REACH-EXTRACTOR"
+    query = "My goal is to build a portfolio-ready agent."
+    document.write_text(
+        f"# RAG\n\nMy goal is to build a portfolio-ready agent. {knowledge_evidence}",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    remembered = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.old",
+        old_memory,
+        "--memory-db",
+        str(memory_database),
+    )
+    assert remembered.returncode == 0
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput("extractor", '{"candidates":[]}', "stop"),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        query,
+        "--mode",
+        "lexical",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert len(model.calls) == 3
+    extraction_call = model.calls[2]
+    assert [message.role for message in extraction_call] == [
+        MessageRole.SYSTEM,
+        MessageRole.USER,
+    ]
+    assert extraction_call[1].content == f"CURRENT USER MESSAGE:\n{query}"
+    extraction_payload = "\n".join(message.content for message in extraction_call)
+    assert old_memory not in extraction_payload
+    assert knowledge_evidence not in extraction_payload
+
+
+@pytest.mark.parametrize(
+    ("extraction_result", "safe_category", "private_value"),
+    [
+        (
+            LanguageModelError("provider-body-private api_key=test-key"),
+            "provider error",
+            "provider-body-private",
+        ),
+        (
+            ModelOutput(
+                "extractor",
+                "not JSON: COMPLETE-EXTRACTION-PROMPT-PRIVATE",
+                "stop",
+            ),
+            "invalid extractor output",
+            "COMPLETE-EXTRACTION-PROMPT-PRIVATE",
+        ),
+        (
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.private",'
+                '"content":"api_key=unsafe-output-private"}]}',
+                "stop",
+            ),
+            "unsafe extractor output",
+            "unsafe-output-private",
+        ),
+    ],
+)
+def test_agent_expected_extraction_failures_keep_answer_and_print_safe_category(
+    tmp_path: Path,
+    extraction_result: ModelOutput | Exception,
+    safe_category: str,
+    private_value: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            extraction_result,
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to build a portfolio-ready agent.",
+        "--mode",
+        "lexical",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(tmp_path / "memory.db"),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
+    assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
+    private_output = result.stdout + result.stderr
+    assert private_value not in private_output
+    assert "goal.private" not in private_output
+    assert "test-key" not in private_output
+    assert "Traceback" not in private_output
+    assert len(model.calls) == 3
+
+
+def test_agent_embedding_failure_keeps_answer_and_hides_private_values(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    private_content = "PRIVATE-CANDIDATE-CONTENT"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.private",'
+                f'"content":"{private_content}"}}]}}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to build a portfolio-ready agent.",
+        "--mode",
+        "lexical",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(tmp_path / "memory.db"),
+        language_model=model,
+        embedder=FakeEmbedder({}),
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.endswith("\nMemory extraction skipped: embedding error\n")
+    assert private_content not in result.stdout
+    assert "goal.private" not in result.stdout
+    assert "(1.0, 0.0)" not in result.stdout
+    assert "Traceback" not in result.stdout
+
+
+def test_agent_storage_failure_keeps_answer_and_hides_private_values(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.private",'
+                '"content":"PRIVATE-STORAGE-CANDIDATE"}]}',
+                "stop",
+            ),
+        ]
+    )
+    store = FakeMemoryStore(
+        create_pending_result=MemoryStorageError(
+            "sqlite-body-private vector=(1.0, 0.0)"
+        )
+    )
+
+    with patch("personal_knowledge_agent.cli._memory_store", return_value=store):
+        result = run_cli(
+            "agent",
+            "My goal is to build a portfolio-ready agent.",
+            "--mode",
+            "lexical",
+            "--db",
+            str(knowledge_database),
+            "--memory-db",
+            str(tmp_path / "memory.db"),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.endswith("\nMemory extraction skipped: storage error\n")
+    assert "sqlite-body-private" not in result.stdout
+    assert "PRIVATE-STORAGE-CANDIDATE" not in result.stdout
+    assert "(1.0, 0.0)" not in result.stdout
+    assert "Traceback" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("error", "safe_category"),
+    [
+        (EmbeddingError("model-load-private"), "embedding error"),
+        (MemoryStorageError("sqlite-open-private"), "storage error"),
+    ],
+)
+def test_agent_memory_dependency_construction_failure_keeps_answer(
+    tmp_path: Path,
+    error: Exception,
+    safe_category: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    with patch("personal_knowledge_agent.cli._memory_store", side_effect=error):
+        result = run_cli(
+            "agent",
+            "My goal is to build a portfolio-ready agent.",
+            "--mode",
+            "lexical",
+            "--db",
+            str(knowledge_database),
+            "--memory-db",
+            str(tmp_path / "memory.db"),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.startswith("Route: retrieve (llm)\nAnswer:\nGrounded. [S1]\n")
+    assert result.stdout.endswith(f"\nMemory extraction skipped: {safe_category}\n")
+    assert "model-load-private" not in result.stdout
+    assert "sqlite-open-private" not in result.stdout
+    assert "Traceback" not in result.stdout
+    assert len(model.calls) == 2
+
+
+def test_agent_conflict_lookup_storage_failure_prints_only_safe_category(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.agent",'
+                '"content":"Build an agent."}]}',
+                "stop",
+            ),
+        ]
+    )
+
+    with patch(
+        "personal_knowledge_agent.cli.MemoryAdminService.list",
+        side_effect=MemoryStorageError("conflict-query-private"),
+    ):
+        result = run_cli(
+            "agent",
+            "My goal is to build a portfolio-ready agent.",
+            "--mode",
+            "lexical",
+            "--db",
+            str(knowledge_database),
+            "--memory-db",
+            str(tmp_path / "memory.db"),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.endswith("\nMemory extraction skipped: storage error\n")
+    assert "Memory candidates:" not in result.stdout
+    assert "Build an agent." not in result.stdout
+    assert "conflict-query-private" not in result.stdout
+    assert "Traceback" not in result.stdout
+
+
+def test_agent_unexpected_memory_exception_remains_visible_to_tests(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.agent",'
+                '"content":"Build an agent."}]}',
+                "stop",
+            ),
+        ]
+    )
+    store = FakeMemoryStore(create_pending_result=RuntimeError("programming bug"))
+
+    with (
+        patch("personal_knowledge_agent.cli._memory_store", return_value=store),
+        pytest.raises(RuntimeError, match="programming bug"),
+    ):
+        run_cli(
+            "agent",
+            "My goal is to build a portfolio-ready agent.",
+            "--mode",
+            "lexical",
+            "--db",
+            str(knowledge_database),
+            "--memory-db",
+            str(tmp_path / "memory.db"),
+            language_model=model,
+        )
+
+
 def test_agent_llm_direct_displays_route_and_local_template(tmp_path: Path) -> None:
     model = ScriptedLanguageModel(
         [
@@ -1252,6 +1989,64 @@ def test_agent_router_failure_displays_safe_fallback_and_retrieves(
     ("router_result", "route_line"),
     [
         (
+            ModelOutput("router", "not JSON", "stop"),
+            "Route: retrieve (fallback: invalid router output)\n",
+        ),
+        (
+            LanguageModelError("router-provider-private"),
+            "Route: retrieve (fallback: provider error)\n",
+        ),
+    ],
+)
+def test_agent_failed_route_does_not_extract_durable_memory(
+    tmp_path: Path,
+    router_result: ModelOutput | Exception,
+    route_line: str,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            router_result,
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to build a portfolio-ready agent.",
+        "--mode",
+        "lexical",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.startswith(route_line + "Answer:\nGrounded. [S1]\n")
+    assert "Memory candidates:" not in result.stdout
+    assert "Memory extraction skipped:" not in result.stdout
+    assert "router-provider-private" not in result.stdout + result.stderr
+    assert len(model.calls) == 2
+    assert not memory_database.exists()
+
+
+@pytest.mark.parametrize(
+    ("router_result", "route_line"),
+    [
+        (
             ModelOutput(
                 "router",
                 '{"action":"retrieve","direct_intent":null}',
@@ -1272,7 +2067,11 @@ def test_agent_keeps_route_visible_when_grounded_generation_fails(
 ) -> None:
     document = tmp_path / "rag.md"
     database = tmp_path / "knowledge.db"
-    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    memory_database = tmp_path / "memory.db"
+    document.write_text(
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        encoding="utf-8",
+    )
     run_cli("ingest", str(document), "--db", str(database))
     model = ScriptedLanguageModel(
         [router_result, LanguageModelError("answer generation failed")]
@@ -1280,9 +2079,13 @@ def test_agent_keeps_route_visible_when_grounded_generation_fails(
 
     result = run_cli(
         "agent",
-        "How does RAG work?",
+        "My goal is to build a portfolio-ready agent.",
+        "--mode",
+        "lexical",
         "--db",
         str(database),
+        "--memory-db",
+        str(memory_database),
         language_model=model,
     )
 
@@ -1290,9 +2093,12 @@ def test_agent_keeps_route_visible_when_grounded_generation_fails(
     assert result.stdout == route_line
     assert "answer generation failed" in result.stderr
     assert "Traceback" not in result.stderr
+    assert len(model.calls) == 2
+    assert not memory_database.exists()
 
 
 def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
+    memory_database = tmp_path / "memory.db"
     model = ScriptedLanguageModel(
         [
             ModelOutput(
@@ -1305,9 +2111,11 @@ def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
 
     result = run_cli(
         "agent",
-        "How does RAG work?",
+        "My goal is to build a portfolio-ready agent.",
         "--db",
         str(tmp_path / "empty.db"),
+        "--memory-db",
+        str(memory_database),
         language_model=model,
     )
 
@@ -1315,6 +2123,8 @@ def test_agent_keeps_route_visible_when_retrieval_fails(tmp_path: Path) -> None:
     assert result.stdout == "Route: retrieve (llm)\n"
     assert "Knowledge base is empty" in result.stderr
     assert "Traceback" not in result.stderr
+    assert len(model.calls) == 1
+    assert not memory_database.exists()
 
 
 def test_agent_requires_api_key_without_exposing_traceback(tmp_path: Path) -> None:
