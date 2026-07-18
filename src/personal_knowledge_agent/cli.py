@@ -11,8 +11,16 @@ from pathlib import Path
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.ingest import IngestService
+from personal_knowledge_agent.application.memory_admin import MemoryAdminService
 from personal_knowledge_agent.application.search import SearchService
-from personal_knowledge_agent.domain.errors import KnowledgeError
+from personal_knowledge_agent.domain.errors import KnowledgeError, MemoryConflictError
+from personal_knowledge_agent.domain.memory import (
+    MemoryActivationAction,
+    MemoryRecord,
+    MemorySearchResult,
+    MemoryStatus,
+    MemoryType,
+)
 from personal_knowledge_agent.domain.models import (
     AgentResponse,
     AnswerStatus,
@@ -30,14 +38,21 @@ from personal_knowledge_agent.infrastructure.hybrid_question_router import (
 from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.memory_safety import (
+    LocalMemorySafetyPolicy,
+)
 from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import (
     OpenAICompatibleChatModel,
 )
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
     SQLiteKeywordIndex,
 )
+from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
+    SQLiteMemoryStore,
+)
 
 _DEFAULT_DATABASE = Path(".pka/knowledge.db")
+_DEFAULT_MEMORY_DATABASE = Path(".pka/memory.db")
 _SNIPPET_LENGTH = 160
 
 
@@ -59,6 +74,14 @@ def _answer_limit(value: str) -> int:
     if not 1 <= limit <= 10:
         raise argparse.ArgumentTypeError("limit must be between 1 and 10")
     return limit
+
+
+def _add_memory_database_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--memory-db",
+        type=Path,
+        default=_DEFAULT_MEMORY_DATABASE,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,6 +135,84 @@ def build_parser() -> argparse.ArgumentParser:
         default=SearchMode.HYBRID.value,
     )
     agent_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Manage confirmation-gated long-term memories.",
+    )
+    memory_subparsers = memory_parser.add_subparsers(
+        dest="memory_command",
+        required=True,
+    )
+
+    remember_parser = memory_subparsers.add_parser(
+        "remember",
+        help="Create one explicit active memory.",
+    )
+    remember_parser.add_argument(
+        "--type",
+        dest="memory_type",
+        choices=[memory_type.value for memory_type in MemoryType],
+        required=True,
+    )
+    remember_parser.add_argument("--key", dest="memory_key", required=True)
+    activation = remember_parser.add_mutually_exclusive_group()
+    activation.add_argument("--replace", dest="replace_id")
+    activation.add_argument("--keep-both", action="store_true")
+    remember_parser.add_argument("content")
+    _add_memory_database_argument(remember_parser)
+
+    list_parser = memory_subparsers.add_parser(
+        "list",
+        help="List stored memories newest first.",
+    )
+    list_parser.add_argument(
+        "--status",
+        choices=[status.value for status in MemoryStatus],
+    )
+    list_parser.add_argument(
+        "--type",
+        dest="memory_type",
+        choices=[memory_type.value for memory_type in MemoryType],
+    )
+    _add_memory_database_argument(list_parser)
+
+    memory_search_parser = memory_subparsers.add_parser(
+        "search",
+        help="Search active memories.",
+    )
+    memory_search_parser.add_argument("query")
+    memory_search_parser.add_argument("--limit", type=_search_limit, default=5)
+    memory_search_parser.add_argument(
+        "--type",
+        dest="memory_type",
+        choices=[memory_type.value for memory_type in MemoryType],
+    )
+    _add_memory_database_argument(memory_search_parser)
+
+    approve_parser = memory_subparsers.add_parser(
+        "approve",
+        help="Activate one pending memory candidate.",
+    )
+    approve_parser.add_argument("candidate_id")
+    approval = approve_parser.add_mutually_exclusive_group()
+    approval.add_argument("--replace", dest="replace_id")
+    approval.add_argument("--keep-both", action="store_true")
+    _add_memory_database_argument(approve_parser)
+
+    reject_parser = memory_subparsers.add_parser(
+        "reject",
+        help="Reject one pending memory candidate.",
+    )
+    reject_parser.add_argument("candidate_id")
+    _add_memory_database_argument(reject_parser)
+
+    forget_parser = memory_subparsers.add_parser(
+        "forget",
+        help="Hard-delete one complete memory replacement chain.",
+    )
+    forget_parser.add_argument("memory_id")
+    _add_memory_database_argument(forget_parser)
     return parser
 
 
@@ -149,6 +250,171 @@ def _search(query: str, limit: int, mode: SearchMode, database: Path) -> None:
         return
     for position, result in enumerate(results, start=1):
         print(_format_result(position, result))
+
+
+def _memory_store(database: Path) -> SQLiteMemoryStore:
+    return SQLiteMemoryStore(database, E5Embedder())
+
+
+def _memory_activation_action(
+    replace_id: str | None,
+    keep_both: bool,
+) -> MemoryActivationAction:
+    if replace_id is not None:
+        return MemoryActivationAction.REPLACE
+    if keep_both:
+        return MemoryActivationAction.KEEP_BOTH
+    return MemoryActivationAction.ACTIVATE
+
+
+def _format_memory_record(record: MemoryRecord) -> str:
+    return (
+        f"[{record.memory_id}] {record.status.value} "
+        f"{record.memory_type.value} {record.memory_key}\n"
+        f"  {_format_snippet(record.content)}"
+    )
+
+
+def _format_memory_search_result(
+    position: int,
+    result: MemorySearchResult,
+) -> str:
+    record = result.memory
+    return (
+        f"{position}. [score={result.score:.3f}] [{record.memory_id}] "
+        f"{record.memory_type.value} {record.memory_key}\n"
+        f"  {_format_snippet(record.content)}"
+    )
+
+
+def _active_memory_ids(
+    service: MemoryAdminService,
+    memory_type: MemoryType,
+    memory_key: str,
+) -> list[str]:
+    return [
+        record.memory_id
+        for record in service.list(
+            status=MemoryStatus.ACTIVE,
+            memory_type=memory_type,
+        )
+        if record.memory_key == memory_key
+    ]
+
+
+def _memory_remember(
+    memory_type: MemoryType,
+    memory_key: str,
+    content: str,
+    *,
+    action: MemoryActivationAction,
+    replace_id: str | None,
+    database: Path,
+) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    try:
+        record = service.remember(
+            memory_type,
+            memory_key,
+            content,
+            action=action,
+            replace_id=replace_id,
+        )
+    except MemoryConflictError as error:
+        if action is not MemoryActivationAction.ACTIVATE:
+            raise
+        active_ids = _active_memory_ids(service, memory_type, memory_key)
+        if not active_ids:
+            raise
+        joined = ", ".join(active_ids)
+        raise MemoryConflictError(
+            f"Active memory conflict. Active IDs: {joined}\n"
+            "Retry with one of:\n"
+            f"  pka memory remember --type {memory_type.value} "
+            f"--key {memory_key} --replace {active_ids[0]} CONTENT\n"
+            f"  pka memory remember --type {memory_type.value} "
+            f"--key {memory_key} --keep-both CONTENT"
+        ) from error
+    print(f"Remembered {_format_memory_record(record)}")
+
+
+def _memory_list(
+    status: MemoryStatus | None,
+    memory_type: MemoryType | None,
+    database: Path,
+) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    for record in service.list(status=status, memory_type=memory_type):
+        print(_format_memory_record(record))
+
+
+def _memory_search(
+    query: str,
+    limit: int,
+    memory_type: MemoryType | None,
+    database: Path,
+) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    results = service.search(query, limit=limit, memory_type=memory_type)
+    if not results:
+        print("No active memories found.")
+        return
+    for position, result in enumerate(results, start=1):
+        print(_format_memory_search_result(position, result))
+
+
+def _memory_approve(
+    candidate_id: str,
+    *,
+    action: MemoryActivationAction,
+    replace_id: str | None,
+    database: Path,
+) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    try:
+        record = service.approve(
+            candidate_id,
+            action=action,
+            replace_id=replace_id,
+        )
+    except MemoryConflictError as error:
+        if action is not MemoryActivationAction.ACTIVATE:
+            raise
+        candidates = service.list(status=MemoryStatus.PENDING)
+        candidate = next(
+            (item for item in candidates if item.memory_id == candidate_id),
+            None,
+        )
+        if candidate is None:
+            raise
+        active_ids = _active_memory_ids(
+            service,
+            candidate.memory_type,
+            candidate.memory_key,
+        )
+        if not active_ids:
+            raise
+        joined = ", ".join(active_ids)
+        raise MemoryConflictError(
+            f"Active memory conflict. Active IDs: {joined}\n"
+            "Retry with one of:\n"
+            f"  pka memory approve {candidate_id} --replace {active_ids[0]}\n"
+            f"  pka memory approve {candidate_id} --keep-both"
+        ) from error
+    print(f"Approved [{record.memory_id}] {record.status.value}")
+
+
+def _memory_reject(candidate_id: str, database: Path) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    service.reject(candidate_id)
+    print(f"Rejected [{candidate_id}]")
+
+
+def _memory_forget(memory_id: str, database: Path) -> None:
+    service = MemoryAdminService(_memory_store(database), LocalMemorySafetyPolicy())
+    deleted = service.forget(memory_id)
+    noun = "record" if deleted == 1 else "records"
+    print(f"Forgot {deleted} memory {noun}.")
 
 
 def _format_evidence_source(answer: GroundedAnswer, citation_id: str) -> str:
@@ -247,6 +513,51 @@ def main(arguments: Sequence[str] | None = None) -> None:
             _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
         elif parsed.command == "agent":
             _agent(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
+        elif parsed.command == "memory":
+            memory_type = (
+                MemoryType(parsed.memory_type)
+                if hasattr(parsed, "memory_type") and parsed.memory_type is not None
+                else None
+            )
+            if parsed.memory_command == "remember":
+                assert memory_type is not None
+                _memory_remember(
+                    memory_type,
+                    parsed.memory_key,
+                    parsed.content,
+                    action=_memory_activation_action(
+                        parsed.replace_id,
+                        parsed.keep_both,
+                    ),
+                    replace_id=parsed.replace_id,
+                    database=parsed.memory_db,
+                )
+            elif parsed.memory_command == "list":
+                status = (
+                    MemoryStatus(parsed.status) if parsed.status is not None else None
+                )
+                _memory_list(status, memory_type, parsed.memory_db)
+            elif parsed.memory_command == "search":
+                _memory_search(
+                    parsed.query,
+                    parsed.limit,
+                    memory_type,
+                    parsed.memory_db,
+                )
+            elif parsed.memory_command == "approve":
+                _memory_approve(
+                    parsed.candidate_id,
+                    action=_memory_activation_action(
+                        parsed.replace_id,
+                        parsed.keep_both,
+                    ),
+                    replace_id=parsed.replace_id,
+                    database=parsed.memory_db,
+                )
+            elif parsed.memory_command == "reject":
+                _memory_reject(parsed.candidate_id, parsed.memory_db)
+            elif parsed.memory_command == "forget":
+                _memory_forget(parsed.memory_id, parsed.memory_db)
     except KnowledgeError as error:
         parser.exit(1, f"error: {error}\n")
 

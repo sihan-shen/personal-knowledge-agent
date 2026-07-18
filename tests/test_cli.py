@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import sqlite3
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
@@ -13,8 +15,16 @@ import pytest
 
 from personal_knowledge_agent.cli import build_parser, main
 from personal_knowledge_agent.domain.errors import LanguageModelError
+from personal_knowledge_agent.domain.memory import (
+    MemoryProposal,
+    MemoryType,
+    memory_source_hash,
+)
 from personal_knowledge_agent.domain.models import ModelOutput
 from personal_knowledge_agent.domain.protocols import LanguageModel
+from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
+    SQLiteMemoryStore,
+)
 from tests.helpers import FakeEmbedder, FakeLanguageModel, ScriptedLanguageModel
 
 
@@ -69,6 +79,23 @@ def run_cli(
         except SystemExit as error:
             returncode = int(error.code or 0)
     return CliResult(returncode, stdout.getvalue(), stderr.getvalue())
+
+
+def seed_pending_memory(
+    database: Path,
+    memory_type: MemoryType,
+    memory_key: str,
+    content: str,
+) -> None:
+    """Seed one real pending row without exposing its generated ID to a CLI test."""
+    store = SQLiteMemoryStore(
+        database,
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    )
+    store.create_pending(
+        (MemoryProposal(memory_type, memory_key, content),),
+        source_hash=memory_source_hash(f"source for {memory_key}"),
+    )
 
 
 def test_health_command_reports_healthy_project() -> None:
@@ -204,6 +231,681 @@ def test_search_reports_explicit_mode(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout.startswith("Search mode: semantic\n")
+
+
+def test_memory_parser_requires_a_nested_command() -> None:
+    result = run_cli("memory")
+
+    assert result.returncode == 2
+    assert "usage:" in result.stderr.lower()
+    assert "memory_command" in result.stderr
+    assert "remember" in result.stderr
+    assert "forget" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("arguments", "action"),
+    [
+        (
+            [
+                "memory",
+                "remember",
+                "--type",
+                "goal",
+                "--key",
+                "goal.ai_engineer",
+                "Become an AI Engineer.",
+            ],
+            "remember",
+        ),
+        (["memory", "list"], "list"),
+        (["memory", "search", "AI Engineer"], "search"),
+        (["memory", "approve", "mem_" + "a" * 32], "approve"),
+        (["memory", "reject", "mem_" + "a" * 32], "reject"),
+        (["memory", "forget", "mem_" + "a" * 32], "forget"),
+    ],
+)
+def test_memory_parser_accepts_each_nested_command(
+    arguments: list[str],
+    action: str,
+) -> None:
+    parsed = build_parser().parse_args(arguments)
+
+    assert parsed.command == "memory"
+    assert parsed.memory_command == action
+    assert parsed.memory_db == Path(".pka/memory.db")
+
+
+@pytest.mark.parametrize(
+    "memory_type",
+    ["preference", "goal", "project", "learning_progress"],
+)
+def test_memory_parser_accepts_each_exact_memory_type(memory_type: str) -> None:
+    remember = build_parser().parse_args(
+        [
+            "memory",
+            "remember",
+            "--type",
+            memory_type,
+            "--key",
+            "project.pka",
+            "content",
+        ]
+    )
+    listed = build_parser().parse_args(["memory", "list", "--type", memory_type])
+    searched = build_parser().parse_args(
+        ["memory", "search", "query", "--type", memory_type]
+    )
+
+    assert remember.memory_type == memory_type
+    assert listed.memory_type == memory_type
+    assert searched.memory_type == memory_type
+
+
+@pytest.mark.parametrize("status", ["pending", "active", "superseded"])
+def test_memory_list_parser_accepts_each_exact_status(status: str) -> None:
+    parsed = build_parser().parse_args(["memory", "list", "--status", status])
+
+    assert parsed.status == status
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_choice"),
+    [
+        (
+            [
+                "memory",
+                "remember",
+                "--type",
+                "other",
+                "--key",
+                "key",
+                "content",
+            ],
+            "learning_progress",
+        ),
+        (["memory", "list", "--type", "other"], "learning_progress"),
+        (["memory", "list", "--status", "rejected"], "superseded"),
+        (
+            ["memory", "search", "query", "--type", "other"],
+            "learning_progress",
+        ),
+    ],
+)
+def test_memory_parser_rejects_values_outside_exact_enum_choices(
+    arguments: list[str],
+    expected_choice: str,
+) -> None:
+    result = run_cli(*arguments)
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+    assert expected_choice in result.stderr
+
+
+@pytest.mark.parametrize("limit", ["1", "20"])
+def test_memory_search_parser_accepts_limit_boundary(limit: str) -> None:
+    parsed = build_parser().parse_args(["memory", "search", "query", "--limit", limit])
+
+    assert parsed.limit == int(limit)
+
+
+@pytest.mark.parametrize("limit", ["0", "21"])
+def test_memory_search_parser_rejects_limit_outside_boundary(limit: str) -> None:
+    result = run_cli("memory", "search", "query", "--limit", limit)
+
+    assert result.returncode == 2
+    assert "between 1 and 20" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["memory", "remember", "--key", "goal.ai_engineer", "content"],
+        ["memory", "remember", "--type", "goal", "content"],
+        ["memory", "remember", "--type", "goal", "--key", "goal.ai_engineer"],
+        ["memory", "search"],
+        ["memory", "approve"],
+        ["memory", "reject"],
+        ["memory", "forget"],
+    ],
+)
+def test_memory_parser_requires_command_inputs(arguments: list[str]) -> None:
+    result = run_cli(*arguments)
+
+    assert result.returncode == 2
+    assert "required" in result.stderr
+
+
+@pytest.mark.parametrize("action", ["remember", "approve"])
+def test_memory_activation_flags_are_mutually_exclusive(action: str) -> None:
+    memory_id = "mem_" + "a" * 32
+    if action == "remember":
+        arguments = [
+            "memory",
+            action,
+            "--type",
+            "goal",
+            "--key",
+            "goal.ai_engineer",
+            "--replace",
+            memory_id,
+            "--keep-both",
+            "content",
+        ]
+    else:
+        arguments = [
+            "memory",
+            action,
+            memory_id,
+            "--replace",
+            memory_id,
+            "--keep-both",
+        ]
+
+    result = run_cli(*arguments)
+
+    assert result.returncode == 2
+    assert "not allowed with argument" in result.stderr
+
+
+def test_memory_parser_accepts_explicit_database_and_activation_actions(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    memory_id = "mem_" + "a" * 32
+    replace = build_parser().parse_args(
+        [
+            "memory",
+            "remember",
+            "--type",
+            "goal",
+            "--key",
+            "goal.ai_engineer",
+            "--replace",
+            memory_id,
+            "content",
+            "--memory-db",
+            str(database),
+        ]
+    )
+    keep_both = build_parser().parse_args(
+        [
+            "memory",
+            "approve",
+            memory_id,
+            "--keep-both",
+            "--memory-db",
+            str(database),
+        ]
+    )
+
+    assert replace.replace_id == memory_id
+    assert replace.keep_both is False
+    assert replace.memory_db == database
+    assert keep_both.replace_id is None
+    assert keep_both.keep_both is True
+    assert keep_both.memory_db == database
+
+
+def test_existing_database_defaults_remain_unchanged() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(["ingest", "note.md"]).db == Path(".pka/knowledge.db")
+    assert parser.parse_args(["search", "query"]).db == Path(".pka/knowledge.db")
+    assert parser.parse_args(["ask", "question"]).db == Path(".pka/knowledge.db")
+    assert parser.parse_args(["agent", "question"]).db == Path(".pka/knowledge.db")
+
+
+def test_memory_remember_list_and_search_persist_without_language_model(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    model = FakeLanguageModel(RuntimeError("must not be called"))
+
+    remembered = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Become an AI Engineer through a RAG portfolio.",
+        "--memory-db",
+        str(database),
+        language_model=model,
+        environment={},
+    )
+    listed = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "active",
+        "--type",
+        "goal",
+        "--memory-db",
+        str(database),
+        language_model=model,
+        environment={},
+    )
+    searched = run_cli(
+        "memory",
+        "search",
+        "AI Engineer RAG",
+        "--type",
+        "goal",
+        "--memory-db",
+        str(database),
+        language_model=model,
+        environment={},
+    )
+
+    identifier = re.search(r"\[(mem_[0-9a-f]{32})\]", remembered.stdout)
+    assert remembered.returncode == 0
+    assert identifier is not None
+    memory_id = identifier.group(1)
+    assert remembered.stdout == (
+        f"Remembered [{memory_id}] active goal goal.ai_engineer\n"
+        "  Become an AI Engineer through a RAG portfolio.\n"
+    )
+    assert listed.returncode == 0
+    assert listed.stdout == (
+        f"[{memory_id}] active goal goal.ai_engineer\n"
+        "  Become an AI Engineer through a RAG portfolio.\n"
+    )
+    assert searched.returncode == 0
+    assert re.fullmatch(
+        rf"1\. \[score=0\.\d{{3}}\] \[{memory_id}\] goal goal\.ai_engineer\n"
+        r"  Become an AI Engineer through a RAG portfolio\.\n",
+        searched.stdout,
+    )
+    combined_output = remembered.stdout + listed.stdout + searched.stdout
+    assert "hash" not in combined_output.casefold()
+    assert "vector" not in combined_output.casefold()
+    assert "provider" not in combined_output.casefold()
+    assert model.calls == []
+
+
+def test_memory_search_empty_database_is_success_without_model_settings(
+    tmp_path: Path,
+) -> None:
+    result = run_cli(
+        "memory",
+        "search",
+        "AI Engineer",
+        "--memory-db",
+        str(tmp_path / "memory.db"),
+        environment={},
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "No active memories found.\n"
+
+
+def test_memory_approve_and_reject_pending_candidates_across_processes(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    seed_pending_memory(
+        database,
+        MemoryType.GOAL,
+        "goal.ai_engineer",
+        "Become an AI Engineer.",
+    )
+    first_list = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+    first_match = re.search(r"\[(mem_[0-9a-f]{32})\]", first_list.stdout)
+    assert first_match is not None
+    approved_id = first_match.group(1)
+
+    approved = run_cli(
+        "memory",
+        "approve",
+        approved_id,
+        "--memory-db",
+        str(database),
+        environment={},
+    )
+    active_list = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "active",
+        "--memory-db",
+        str(database),
+    )
+
+    assert approved.returncode == 0
+    assert approved.stdout == f"Approved [{approved_id}] active\n"
+    assert f"[{approved_id}] active goal goal.ai_engineer" in active_list.stdout
+
+    seed_pending_memory(
+        database,
+        MemoryType.PROJECT,
+        "project.rag",
+        "Private candidate content to remove.",
+    )
+    second_list = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+    second_match = re.search(r"\[(mem_[0-9a-f]{32})\]", second_list.stdout)
+    assert second_match is not None
+    rejected_id = second_match.group(1)
+
+    rejected = run_cli(
+        "memory",
+        "reject",
+        rejected_id,
+        "--memory-db",
+        str(database),
+        environment={},
+    )
+    pending_after_rejection = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+
+    assert rejected.returncode == 0
+    assert rejected.stdout == f"Rejected [{rejected_id}]\n"
+    assert pending_after_rejection.returncode == 0
+    assert "Private candidate content to remove." not in pending_after_rejection.stdout
+    assert rejected_id not in pending_after_rejection.stdout
+    with sqlite3.connect(database) as connection:
+        remaining_rows = connection.execute(
+            "SELECT content FROM memories WHERE memory_id = ?",
+            (rejected_id,),
+        ).fetchall()
+    assert remaining_rows == []
+
+
+def test_memory_replace_keep_both_and_forget_chain_across_processes(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    first = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Build a portfolio-ready agent.",
+        "--memory-db",
+        str(database),
+    )
+    first_match = re.search(r"\[(mem_[0-9a-f]{32})\]", first.stdout)
+    assert first_match is not None
+    first_id = first_match.group(1)
+
+    replacement = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "--replace",
+        first_id,
+        "Build a production-ready agent.",
+        "--memory-db",
+        str(database),
+    )
+    replacement_match = re.search(
+        r"\[(mem_[0-9a-f]{32})\]",
+        replacement.stdout,
+    )
+    assert replacement.returncode == 0
+    assert replacement_match is not None
+    replacement_id = replacement_match.group(1)
+
+    after_replacement = run_cli(
+        "memory",
+        "list",
+        "--memory-db",
+        str(database),
+    )
+    assert f"[{first_id}] superseded goal goal.ai_engineer" in (
+        after_replacement.stdout
+    )
+    assert f"[{replacement_id}] active goal goal.ai_engineer" in (
+        after_replacement.stdout
+    )
+
+    kept = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "--keep-both",
+        "Publish the agent as open source.",
+        "--memory-db",
+        str(database),
+    )
+    kept_match = re.search(r"\[(mem_[0-9a-f]{32})\]", kept.stdout)
+    assert kept.returncode == 0
+    assert kept_match is not None
+    kept_id = kept_match.group(1)
+
+    active = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "active",
+        "--memory-db",
+        str(database),
+    )
+    assert f"[{replacement_id}] active goal goal.ai_engineer" in active.stdout
+    assert f"[{kept_id}] active goal goal.ai_engineer" in active.stdout
+    assert active.stdout.count(" active goal goal.ai_engineer") == 2
+
+    forgotten = run_cli(
+        "memory",
+        "forget",
+        replacement_id,
+        "--memory-db",
+        str(database),
+    )
+    remaining = run_cli(
+        "memory",
+        "list",
+        "--memory-db",
+        str(database),
+    )
+
+    assert forgotten.returncode == 0
+    assert forgotten.stdout == "Forgot 2 memory records.\n"
+    assert first_id not in remaining.stdout
+    assert replacement_id not in remaining.stdout
+    assert f"[{kept_id}] active goal goal.ai_engineer" in remaining.stdout
+
+
+def test_memory_bare_conflicts_report_ids_and_actionable_follow_up_commands(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    first = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Become an AI Engineer.",
+        "--memory-db",
+        str(database),
+    )
+    active_match = re.search(r"\[(mem_[0-9a-f]{32})\]", first.stdout)
+    assert active_match is not None
+    active_id = active_match.group(1)
+
+    remember_conflict = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Build a second AI portfolio.",
+        "--memory-db",
+        str(database),
+    )
+
+    assert remember_conflict.returncode == 1
+    assert f"Active IDs: {active_id}" in remember_conflict.stderr
+    assert (
+        "pka memory remember --type goal --key goal.ai_engineer "
+        f"--replace {active_id} CONTENT"
+    ) in remember_conflict.stderr
+    assert (
+        "pka memory remember --type goal --key goal.ai_engineer --keep-both CONTENT"
+    ) in remember_conflict.stderr
+    assert "Traceback" not in remember_conflict.stderr
+
+    seed_pending_memory(
+        database,
+        MemoryType.GOAL,
+        "goal.ai_engineer",
+        "Pending AI Engineer candidate.",
+    )
+    pending = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+    candidate_match = re.search(r"\[(mem_[0-9a-f]{32})\]", pending.stdout)
+    assert candidate_match is not None
+    candidate_id = candidate_match.group(1)
+
+    approval_conflict = run_cli(
+        "memory",
+        "approve",
+        candidate_id,
+        "--memory-db",
+        str(database),
+    )
+    pending_after = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+    active_search = run_cli(
+        "memory",
+        "search",
+        "Pending AI Engineer candidate",
+        "--memory-db",
+        str(database),
+    )
+
+    assert approval_conflict.returncode == 1
+    assert f"Active IDs: {active_id}" in approval_conflict.stderr
+    assert (
+        f"pka memory approve {candidate_id} --replace {active_id}"
+        in approval_conflict.stderr
+    )
+    assert f"pka memory approve {candidate_id} --keep-both" in approval_conflict.stderr
+    assert "Traceback" not in approval_conflict.stderr
+    assert candidate_id in pending_after.stdout
+    assert "Pending AI Engineer candidate." in pending_after.stdout
+    assert candidate_id not in active_search.stdout
+    assert "Pending AI Engineer candidate." not in active_search.stdout
+
+
+def test_memory_invalid_unsafe_unknown_and_conflicting_operations_are_safe(
+    tmp_path: Path,
+) -> None:
+    unknown_id = "mem_" + "f" * 32
+    cases = [
+        (
+            "invalid-key",
+            [
+                "memory",
+                "remember",
+                "--type",
+                "goal",
+                "--key",
+                "INVALID KEY",
+                "content",
+            ],
+        ),
+        (
+            "unsafe-content",
+            [
+                "memory",
+                "remember",
+                "--type",
+                "goal",
+                "--key",
+                "goal.secret",
+                "api_key=do-not-store-this",
+            ],
+        ),
+        ("unknown-approve", ["memory", "approve", unknown_id]),
+        ("unknown-reject", ["memory", "reject", unknown_id]),
+        ("unknown-forget", ["memory", "forget", unknown_id]),
+        (
+            "keep-both-without-conflict",
+            [
+                "memory",
+                "remember",
+                "--type",
+                "goal",
+                "--key",
+                "goal.empty",
+                "--keep-both",
+                "content",
+            ],
+        ),
+        (
+            "replace-unknown",
+            [
+                "memory",
+                "remember",
+                "--type",
+                "goal",
+                "--key",
+                "goal.empty",
+                "--replace",
+                unknown_id,
+                "content",
+            ],
+        ),
+    ]
+
+    for case_name, arguments in cases:
+        result = run_cli(
+            *arguments,
+            "--memory-db",
+            str(tmp_path / f"{case_name}.db"),
+            environment={},
+        )
+
+        assert result.returncode == 1, case_name
+        assert result.stderr.startswith("error: "), case_name
+        assert "Traceback" not in result.stderr, case_name
+        assert "do-not-store-this" not in result.stderr, case_name
 
 
 def test_ask_parser_uses_safe_defaults() -> None:
