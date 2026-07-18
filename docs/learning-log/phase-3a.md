@@ -167,17 +167,23 @@ suppressed, while forgetting removes the application's retained lifecycle data.
 
 ## Provider disclosure, local storage, and erasure limits
 
-On an allowed automatic extraction hit, the configured provider receives only the
-current user message plus the extraction instructions. It does not receive existing
-memories, knowledge evidence, database paths, timestamps, hashes, embeddings, or API
-keys. This is an additional request after the normal successful Agent workflow; it
-does not reduce what the earlier router or grounded-answer calls already received.
+Automatic extraction is considered only after a successful Agent answer on a
+non-fallback route. If a router provider or parsing error triggers fail-closed
+retrieval, extraction is skipped even when the subsequent grounded answer succeeds.
+On an eligible non-fallback route with an allowed extraction hit, the configured
+provider receives only the current user message plus the extraction instructions. It
+does not receive existing memories, knowledge evidence, database paths, timestamps,
+hashes, embeddings, or API keys. This additional request does not reduce what the
+earlier router or grounded-answer calls already received.
 
 The cost model is explicit:
 
-- A prefilter miss adds zero model calls.
-- An allowed hit adds one extraction request after a successful answer, although
-  provider SDK retries may create more than one billable attempt.
+- On an eligible non-fallback route, a prefilter miss adds zero model calls.
+- On that route, an allowed hit adds one logical extraction request after the
+  successful answer, although provider SDK retries may create more than one billable
+  attempt.
+- A fail-closed fallback route adds no extraction request, even if its grounded answer
+  succeeds.
 - Every explicit memory command makes zero remote model calls. Local writes and
   searches may load E5.
 

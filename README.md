@@ -289,13 +289,16 @@ memories for routing or answer generation. Pending, active, and superseded recor
 do not influence `pka agent` or `pka ask` answers yet. Phase 3B will design active
 memory recall, prompt injection, and visible memory use separately.
 
-Automatic extraction happens only after a successful `pka agent` answer. A local
-prefilter miss adds zero model calls. If the prefilter hits and the raw message passes
-the local safety screen, the configured provider receives the current user message
-in one additional extraction request. Existing memories, knowledge evidence, local
-paths, hashes, timestamps, embeddings, and credentials are not included in that
-request. Provider SDK retries can turn one logical extraction request into multiple
-billable attempts, so the prefilter is a cost guard rather than a billing guarantee.
+Automatic extraction is considered only after a successful `pka agent` answer on a
+non-fallback route. If a router provider or parsing error triggers fail-closed
+retrieval, extraction is skipped even when the subsequent grounded answer succeeds.
+On an eligible non-fallback route, a local prefilter miss adds zero model calls. If
+the prefilter hits and the raw message passes the local safety screen, the configured
+provider receives the current user message in one additional logical extraction
+request. Existing memories, knowledge evidence, local paths, hashes, timestamps,
+embeddings, and credentials are not included in that request. Provider SDK retries
+can turn one logical extraction request into multiple billable attempts, so the
+prefilter is a cost guard rather than a billing guarantee.
 
 Every explicit `pka memory remember/list/search/approve/reject/forget` command makes
 zero remote model calls. Local writes and searches may load the E5 embedding model.
