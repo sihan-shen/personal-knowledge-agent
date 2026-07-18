@@ -315,6 +315,20 @@ def test_memory_aware_result_and_agent_response_keep_recall_report() -> None:
     assert response.memory_recall is report
 
 
+def test_non_fallback_agent_response_requires_memory_recall_report() -> None:
+    grounded = GroundedAnswer(
+        AnswerStatus.INSUFFICIENT_EVIDENCE,
+        "Not enough evidence.",
+        (),
+        (),
+        None,
+    )
+    route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
+
+    with pytest.raises(ValueError, match="requires memory recall"):
+        AgentResponse(route, None, grounded)
+
+
 def test_fallback_agent_response_rejects_memory_recall_report() -> None:
     grounded = GroundedAnswer(
         AnswerStatus.INSUFFICIENT_EVIDENCE,

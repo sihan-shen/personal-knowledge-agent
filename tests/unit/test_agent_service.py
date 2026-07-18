@@ -10,11 +10,13 @@ from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import InvalidQueryError, LanguageModelError
+from personal_knowledge_agent.domain.memory import MemoryRecallReport
 from personal_knowledge_agent.domain.models import (
     AnswerStatus,
     Chunk,
     DirectIntent,
     Document,
+    MemoryAwareAnswerResult,
     ModelOutput,
     RouteAction,
     RouteDecision,
@@ -58,6 +60,38 @@ class FakeIndex:
     ) -> list[SearchResult]:
         self.calls.append((query, limit, mode))
         return self._results
+
+
+class FakeMemoryAnswerer:
+    def __init__(self, result: MemoryAwareAnswerResult | Exception) -> None:
+        self.result = result
+        self.calls: list[tuple[str, int, SearchMode]] = []
+
+    def answer(
+        self,
+        question: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.HYBRID,
+    ) -> MemoryAwareAnswerResult:
+        self.calls.append((question, limit, mode))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class RecordingFactory:
+    def __init__(self, answerer: FakeMemoryAnswerer) -> None:
+        self.answerer = answerer
+        self.calls = 0
+
+    def __call__(self) -> FakeMemoryAnswerer:
+        self.calls += 1
+        return self.answerer
+
+
+def unused_factory() -> FakeMemoryAnswerer:
+    raise AssertionError("memory answerer factory must not be called")
 
 
 def make_answer_service(
@@ -113,7 +147,7 @@ def test_direct_route_returns_local_language_aware_template_without_answer_call(
     router = FakeRouter(route)
     answer_service, index, model = make_answer_service()
 
-    response = AgentService(router, answer_service).respond(question)
+    response = AgentService(router, answer_service, unused_factory).respond(question)
 
     assert response.route == route
     assert response.direct_answer == expected
@@ -123,25 +157,17 @@ def test_direct_route_returns_local_language_aware_template_without_answer_call(
     assert model.calls == []
 
 
-@pytest.mark.parametrize(
-    "route",
-    [
-        RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM),
-        RouteDecision(
-            RouteAction.RETRIEVE,
-            None,
-            RouteSource.FALLBACK,
-            RouterFallbackReason.INVALID_OUTPUT,
-        ),
-    ],
-)
-def test_retrieve_and_fallback_routes_delegate_to_grounded_answer(
-    route: RouteDecision,
-) -> None:
+def test_fallback_route_uses_document_answerer_without_memory_factory() -> None:
+    route = RouteDecision(
+        RouteAction.RETRIEVE,
+        None,
+        RouteSource.FALLBACK,
+        RouterFallbackReason.INVALID_OUTPUT,
+    )
     router = FakeRouter(route)
     answer_service, index, model = make_answer_service()
 
-    response = AgentService(router, answer_service).respond(
+    response = AgentService(router, answer_service, unused_factory).respond(
         "How does RAG work?",
         limit=3,
         mode=SearchMode.SEMANTIC,
@@ -153,6 +179,30 @@ def test_retrieve_and_fallback_routes_delegate_to_grounded_answer(
     assert response.grounded_answer.status is AnswerStatus.ANSWERED
     assert index.calls == [("How does RAG work?", 3, SearchMode.SEMANTIC)]
     assert len(model.calls) == 1
+    assert response.memory_recall is None
+
+
+def test_non_fallback_retrieve_lazily_uses_memory_answerer_once() -> None:
+    route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
+    router = FakeRouter(route)
+    answer_service, index, model = make_answer_service()
+    grounded = answer_service.answer("How does RAG work?")
+    index.calls.clear()
+    model.calls.clear()
+    report = MemoryRecallReport((), ())
+    memory_answerer = FakeMemoryAnswerer(MemoryAwareAnswerResult(grounded, report))
+    factory = RecordingFactory(memory_answerer)
+
+    response = AgentService(router, answer_service, factory).respond(
+        "How does RAG work?", limit=3, mode=SearchMode.SEMANTIC
+    )
+
+    assert response.grounded_answer is grounded
+    assert response.memory_recall is report
+    assert factory.calls == 1
+    assert memory_answerer.calls == [("How does RAG work?", 3, SearchMode.SEMANTIC)]
+    assert index.calls == []
+    assert model.calls == []
 
 
 @pytest.mark.parametrize(
@@ -174,7 +224,9 @@ def test_invalid_input_is_rejected_before_router_or_answer_dependencies(
     answer_service, index, model = make_answer_service()
 
     with pytest.raises(InvalidQueryError, match=message):
-        AgentService(router, answer_service).respond(question, limit=limit)
+        AgentService(router, answer_service, unused_factory).respond(
+            question, limit=limit
+        )
 
     assert router.calls == []
     assert index.calls == []
@@ -184,11 +236,12 @@ def test_invalid_input_is_rejected_before_router_or_answer_dependencies(
 def test_route_observer_runs_before_grounded_answer_failure() -> None:
     route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
     router = FakeRouter(route)
-    answer_service, _, _ = make_answer_service(LanguageModelError("answer failed"))
+    answer_service, _, _ = make_answer_service()
+    memory_answerer = FakeMemoryAnswerer(LanguageModelError("answer failed"))
     observed: list[RouteDecision] = []
 
     with pytest.raises(LanguageModelError, match="answer failed"):
-        AgentService(router, answer_service).respond(
+        AgentService(router, answer_service, RecordingFactory(memory_answerer)).respond(
             "How does RAG work?",
             on_route=observed.append,
         )

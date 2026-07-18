@@ -661,6 +661,11 @@ def __init__(
 ) -> None: ...
 ```
 
+Until Task 9 migrates the CLI composition root, keep the factory optional. Its
+temporary compatibility path uses the existing document answerer and attaches an
+empty recall report, so the domain invariant and static checks remain valid. Task 9
+must remove this default once every production caller supplies the lazy factory.
+
 After direct handling, use the old answerer only when
 `route.source is RouteSource.FALLBACK`; otherwise invoke the factory once, call the
 memory-aware answerer, and construct `AgentResponse` with its recall report.
@@ -731,6 +736,8 @@ def memory_answerer() -> MemoryAwareAnswerService:
 ```
 
 Pass this closure to `AgentService`. Do not invoke it in the CLI before routing.
+Remove Task 8's optional factory default and compatibility branch in the same
+change, making the lazy factory mandatory for every production caller.
 
 - [ ] **Step 4: Render warnings and cited context safely**
 

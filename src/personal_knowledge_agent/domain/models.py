@@ -233,6 +233,8 @@ class AgentResponse:
             if self.route.source is RouteSource.FALLBACK:
                 if self.memory_recall is not None:
                     raise ValueError("fallback route must not include memory recall")
+            elif self.memory_recall is None:
+                raise ValueError("non-fallback retrieve route requires memory recall")
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from personal_knowledge_agent.application.answer import AnswerService
 from personal_knowledge_agent.domain.errors import InvalidQueryError
+from personal_knowledge_agent.domain.memory import MemoryRecallReport
 from personal_knowledge_agent.domain.models import (
     AgentResponse,
     DirectIntent,
     RouteAction,
     RouteDecision,
+    RouteSource,
     SearchMode,
 )
-from personal_knowledge_agent.domain.protocols import QuestionRouter
+from personal_knowledge_agent.domain.protocols import (
+    GroundedQuestionAnswerer,
+    MemoryAwareQuestionAnswerer,
+    QuestionRouter,
+)
 
 _DIRECT_ANSWERS = {
     (
@@ -58,10 +63,13 @@ class AgentService:
     def __init__(
         self,
         router: QuestionRouter,
-        answer_service: AnswerService,
+        answer_service: GroundedQuestionAnswerer,
+        memory_answerer_factory: Callable[[], MemoryAwareQuestionAnswerer]
+        | None = None,
     ) -> None:
         self._router = router
         self._answer_service = answer_service
+        self._memory_answerer_factory = memory_answerer_factory
 
     def respond(
         self,
@@ -88,9 +96,32 @@ class AgentService:
                 None,
             )
 
-        grounded_answer = self._answer_service.answer(
+        if route.source is RouteSource.FALLBACK:
+            grounded_answer = self._answer_service.answer(
+                question,
+                limit=limit,
+                mode=mode,
+            )
+            return AgentResponse(route, None, grounded_answer)
+
+        # Task 9 removes this compatibility branch after the CLI supplies the
+        # lazy memory-aware composition root.
+        if self._memory_answerer_factory is None:
+            grounded_answer = self._answer_service.answer(
+                question,
+                limit=limit,
+                mode=mode,
+            )
+            return AgentResponse(
+                route,
+                None,
+                grounded_answer,
+                MemoryRecallReport((), ()),
+            )
+
+        result = self._memory_answerer_factory().answer(
             question,
             limit=limit,
             mode=mode,
         )
-        return AgentResponse(route, None, grounded_answer)
+        return AgentResponse(route, None, result.answer, result.recall)
