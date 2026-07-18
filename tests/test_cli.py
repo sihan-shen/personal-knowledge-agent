@@ -25,9 +25,11 @@ from personal_knowledge_agent.domain.errors import (
     UnsafeMemoryError,
 )
 from personal_knowledge_agent.domain.memory import (
+    MemoryActivationAction,
     MemoryProposal,
     MemoryRecallReport,
     MemoryRecallWarning,
+    MemoryRecord,
     MemoryType,
     memory_source_hash,
 )
@@ -120,9 +122,9 @@ def seed_active_memory(
     memory_type: MemoryType,
     memory_key: str,
     content: str,
-) -> None:
+) -> MemoryRecord:
     """Seed one confirmed memory through the real persistence boundary."""
-    SQLiteMemoryStore(
+    return SQLiteMemoryStore(
         database,
         FakeEmbedder({}, default_vector=(1.0, 0.0)),
     ).remember(memory_type, memory_key, content)
@@ -1315,7 +1317,7 @@ def test_agent_answers_from_active_memory_when_knowledge_base_is_empty(
     tmp_path: Path,
 ) -> None:
     memory_database = tmp_path / "memory.db"
-    seed_active_memory(
+    memory = seed_active_memory(
         memory_database,
         MemoryType.PREFERENCE,
         "answer_style",
@@ -1352,6 +1354,17 @@ def test_agent_answers_from_active_memory_when_knowledge_base_is_empty(
         "[M1] preference.answer_style — Prefer concise answers.\n"
     )
     assert result.stderr == ""
+    process_output = result.stdout + result.stderr
+    for private_value in (
+        memory.memory_id,
+        memory.content_hash,
+        memory.created_at.isoformat(),
+        str(memory_database),
+        "test-key",
+        "0.01987654321",
+    ):
+        assert private_value not in process_output
+    assert "Traceback" not in process_output
 
 
 def test_agent_renders_document_and_memory_citations_in_separate_sections(
@@ -1486,6 +1499,103 @@ def test_agent_displays_safe_policy_recall_warning_once(
     assert result.stdout.startswith(
         f"Route: retrieve (llm)\nMemory recall warning: {label}\nAnswer:\n"
     )
+
+
+def test_agent_never_sends_pending_or_superseded_memory_to_answer_model(
+    tmp_path: Path,
+) -> None:
+    pending_sentinel = "PENDING-MEMORY-PRIVATE"
+    superseded_sentinel = "SUPERSEDED-MEMORY-PRIVATE"
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    store = SQLiteMemoryStore(
+        memory_database,
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    )
+    superseded = store.remember(
+        MemoryType.GOAL,
+        "rag_project",
+        superseded_sentinel,
+    )
+    store.remember(
+        MemoryType.GOAL,
+        "rag_project",
+        "Build the current RAG project.",
+        action=MemoryActivationAction.REPLACE,
+        replace_id=superseded.memory_id,
+    )
+    store.create_pending(
+        (MemoryProposal(MemoryType.PREFERENCE, "answer_style", pending_sentinel),),
+        source_hash=memory_source_hash("lifecycle sentinel source"),
+    )
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop"),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Use retrieval. [S1]",'
+                '"citation_ids":["S1"]}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "How should I build the RAG project?",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    answer_request = "\n".join(message.content for message in model.calls[1])
+    assert result.returncode == 0
+    assert pending_sentinel not in answer_request
+    assert superseded_sentinel not in answer_request
+    assert pending_sentinel not in result.stdout + result.stderr
+    assert superseded_sentinel not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("error", "label"),
+    [
+        (EmbeddingError("PRIVATE-VECTOR-DETAIL"), "embedding error"),
+        (MemoryStorageError("/private/memory.db"), "storage error"),
+    ],
+)
+def test_agent_recall_failure_without_documents_refuses_without_answer_call(
+    tmp_path: Path,
+    error: Exception,
+    label: str,
+) -> None:
+    model = ScriptedLanguageModel(
+        [ModelOutput("router", '{"action":"retrieve","direct_intent":null}', "stop")]
+    )
+
+    with patch("personal_knowledge_agent.cli._memory_store", side_effect=error):
+        result = run_cli(
+            "agent",
+            "How does RAG work?",
+            "--db",
+            str(tmp_path / "knowledge.db"),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        f"Route: retrieve (llm)\nMemory recall warning: {label}\n"
+        "Insufficient evidence:\n"
+        "The knowledge base does not contain enough evidence.\n"
+    )
+    assert result.stderr == ""
+    assert len(model.calls) == 1
+    assert "PRIVATE-VECTOR-DETAIL" not in result.stdout + result.stderr
+    assert "/private/memory.db" not in result.stdout + result.stderr
 
 
 def test_agent_prefilter_miss_preserves_phase_2b_output_byte_for_byte(

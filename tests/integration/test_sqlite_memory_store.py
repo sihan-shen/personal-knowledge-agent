@@ -714,7 +714,9 @@ def test_search_never_returns_pending_or_superseded_memories(tmp_path: Path) -> 
     database = tmp_path / "memory.db"
     embedder = FakeEmbedder({}, default_vector=(1.0, 0.0))
     store = make_store(database, embedder=embedder)
-    old = store.remember(MemoryType.GOAL, "goal.agent", "Old hidden memory")
+    superseded_sentinel = "SUPERSEDED-LIFECYCLE-SENTINEL"
+    pending_sentinel = "PENDING-LIFECYCLE-SENTINEL"
+    old = store.remember(MemoryType.GOAL, "goal.agent", superseded_sentinel)
     active = store.remember(
         MemoryType.GOAL,
         "goal.agent",
@@ -723,7 +725,7 @@ def test_search_never_returns_pending_or_superseded_memories(tmp_path: Path) -> 
         replace_id=old.memory_id,
     )
     pending = store.create_pending(
-        (MemoryProposal(MemoryType.PROJECT, "project.pending", "Pending memory"),),
+        (MemoryProposal(MemoryType.PROJECT, "project.pending", pending_sentinel),),
         source_hash=memory_source_hash("source"),
     )[0]
 
@@ -733,6 +735,9 @@ def test_search_never_returns_pending_or_superseded_memories(tmp_path: Path) -> 
     assert {old.memory_id, pending.memory_id}.isdisjoint(
         result.memory.memory_id for result in results
     )
+    serialized_results = repr(results)
+    assert superseded_sentinel not in serialized_results
+    assert pending_sentinel not in serialized_results
 
 
 @pytest.mark.parametrize(

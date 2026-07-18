@@ -110,6 +110,8 @@ def test_parser_rejects_invalid_schema(content: str) -> None:
     [
         '{"status":"answered","answer":"No marker","citation_ids":[]}',
         '{"status":"answered","answer":"Unknown [M2]","citation_ids":["M2"]}',
+        '{"status":"answered","answer":"Injected [S99] [M99]",'
+        '"citation_ids":["S99","M99"]}',
         '{"status":"answered","answer":"Bad [M0]","citation_ids":["M0"]}',
         '{"status":"answered","answer":"Memory [M1] source [S1]",'
         '"citation_ids":["S1","M1"]}',

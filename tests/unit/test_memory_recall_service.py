@@ -22,6 +22,9 @@ from personal_knowledge_agent.domain.memory import (
     MemoryType,
     memory_content_hash,
 )
+from personal_knowledge_agent.infrastructure.memory_relevance import (
+    ConservativeMemoryRelevancePolicy,
+)
 from tests.helpers import FakeMemoryStore
 
 _NOW = datetime(2026, 7, 18, tzinfo=UTC)
@@ -119,6 +122,26 @@ def test_recall_uses_bounded_candidates_and_labels_eligible_slots() -> None:
         ("agent goal", irrelevant.memory_id),
     ]
     assert safety.calls == [("goal", "goal.agent", "Build an agent")]
+
+
+def test_recall_excludes_low_similarity_active_memory_without_token_overlap() -> None:
+    irrelevant = record(1, "preference.theme", "Prefer dark mode")
+    store = FakeMemoryStore(
+        search_result=[MemorySearchResult(irrelevant, 0.02, 0.839999)],
+        list_memories_result=[irrelevant],
+    )
+    safety = RecordingSafetyPolicy()
+    service = MemoryRecallService(
+        store,
+        ConservativeMemoryRelevancePolicy(),
+        safety,
+    )
+
+    report = service.recall("How does retrieval augmented generation work?")
+
+    assert report.memories == ()
+    assert report.warnings == ()
+    assert safety.calls == []
 
 
 def test_recall_includes_complete_keep_both_slot_in_stable_order() -> None:
