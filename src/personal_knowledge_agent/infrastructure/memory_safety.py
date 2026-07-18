@@ -8,10 +8,24 @@ import unicodedata
 _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", re.IGNORECASE),
     re.compile(r"\bsk-[a-z0-9_-]{12,}\b", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[a-z0-9._~+/=-]{12,}\b", re.IGNORECASE),
+    re.compile(r"\bgithub_pat_[a-z0-9_]{20,}\b", re.IGNORECASE),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b", re.IGNORECASE),
     re.compile(
         r"\b(?:password|passwd|api[_ -]?key|access[_ -]?token)\s*[:=]",
         re.IGNORECASE,
     ),
+)
+
+_CHINESE_SECRET_INDICATOR_PATTERNS = (
+    re.compile(r"(?:密码|密碼)(?![学學子])"),
+    re.compile(r"api\s*(?:密钥|秘钥|密鑰|金鑰)", re.IGNORECASE),
+    re.compile(
+        r"(?:访问|存取|认证|認證|身份验证|身份驗證)\s*"
+        r"(?:令牌|权杖|權杖|token)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:私钥|私鑰|私人密钥|私人密鑰|私人金鑰)"),
 )
 
 _TERM_SEPARATOR_PATTERN = re.compile(r"[._-]+")
@@ -60,6 +74,11 @@ class LocalMemorySafetyPolicy:
         for value in values:
             normalized = _normalize(value)
             if any(pattern.search(normalized) for pattern in _SECRET_PATTERNS):
+                return False
+            if any(
+                pattern.search(normalized)
+                for pattern in _CHINESE_SECRET_INDICATOR_PATTERNS
+            ):
                 return False
             term_value = _TERM_SEPARATOR_PATTERN.sub(" ", normalized)
             if any(term in term_value for term in _PROHIBITED_TERMS):

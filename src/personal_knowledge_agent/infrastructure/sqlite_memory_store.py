@@ -149,6 +149,15 @@ class _PreparedMemory:
     embedding: _PreparedEmbedding
 
 
+@dataclass(frozen=True, slots=True)
+class _ReplacementNode:
+    memory_id: str
+    memory_type: MemoryType
+    memory_key: str
+    status: MemoryStatus
+    supersedes_id: str | None
+
+
 class SQLiteMemoryStore:
     """Persist memories and lifecycle transitions in a dedicated SQLite database."""
 
@@ -426,23 +435,19 @@ class SQLiteMemoryStore:
                         JOIN replacement_chain
                             ON memories.supersedes_id = replacement_chain.memory_id
                     )
-                    SELECT memory_id, memory_type, memory_key, content
+                    SELECT
+                        memory_id,
+                        memory_type,
+                        memory_key,
+                        content,
+                        status,
+                        supersedes_id
                     FROM memories
                     WHERE memory_id IN (SELECT memory_id FROM replacement_chain)
                     """,
                     (memory_id,),
                 ).fetchall()
-                chain_ids = [
-                    self._require_stored_memory_id(row, "memory_id") for row in rows
-                ]
-                proposal_hashes = [
-                    memory_proposal_hash(
-                        MemoryType(self._require_stored_str(row, "memory_type")),
-                        self._require_stored_str(row, "memory_key"),
-                        self._require_stored_str(row, "content"),
-                    )
-                    for row in rows
-                ]
+                chain_ids, proposal_hashes = self._validate_replacement_component(rows)
                 placeholders = ", ".join("?" for _ in chain_ids)
                 connection.execute(
                     f"DELETE FROM memory_postings WHERE memory_id IN ({placeholders})",
@@ -1019,6 +1024,106 @@ class SQLiteMemoryStore:
             (timestamp.isoformat(), replace_id),
         )
         return replace_id
+
+    @classmethod
+    def _validate_replacement_component(
+        cls,
+        rows: Sequence[sqlite3.Row],
+    ) -> tuple[list[str], list[str]]:
+        error_message = "Stored memory replacement lifecycle is invalid"
+        nodes: dict[str, _ReplacementNode] = {}
+        proposal_hashes: list[str] = []
+        for row in rows:
+            memory_id = cls._require_stored_memory_id(row, "memory_id")
+            memory_type = MemoryType(cls._require_stored_str(row, "memory_type"))
+            memory_key = cls._require_stored_str(row, "memory_key")
+            if _MEMORY_KEY_PATTERN.fullmatch(memory_key) is None:
+                raise MemoryStorageError(error_message)
+            status = MemoryStatus(cls._require_stored_str(row, "status"))
+            supersedes_id = cls._optional_stored_str(row, "supersedes_id")
+            if supersedes_id is not None:
+                if _MEMORY_ID_PATTERN.fullmatch(supersedes_id) is None:
+                    raise MemoryStorageError(error_message)
+            if memory_id in nodes:
+                raise MemoryStorageError(error_message)
+            nodes[memory_id] = _ReplacementNode(
+                memory_id=memory_id,
+                memory_type=memory_type,
+                memory_key=memory_key,
+                status=status,
+                supersedes_id=supersedes_id,
+            )
+            proposal_hashes.append(
+                memory_proposal_hash(
+                    memory_type,
+                    memory_key,
+                    cls._require_stored_str(row, "content"),
+                )
+            )
+
+        if not nodes:
+            raise MemoryStorageError(error_message)
+
+        replacement_counts = dict.fromkeys(nodes, 0)
+        edge_count = 0
+        for node in nodes.values():
+            if node.supersedes_id is None:
+                continue
+            edge_count += 1
+            replaced = nodes.get(node.supersedes_id)
+            if replaced is None:
+                raise MemoryStorageError(error_message)
+            if (
+                node.memory_type,
+                node.memory_key,
+            ) != (
+                replaced.memory_type,
+                replaced.memory_key,
+            ):
+                raise MemoryStorageError(error_message)
+            if (
+                node.status not in (MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED)
+                or replaced.status is not MemoryStatus.SUPERSEDED
+            ):
+                raise MemoryStorageError(error_message)
+            replacement_counts[replaced.memory_id] += 1
+            if replacement_counts[replaced.memory_id] > 1:
+                raise MemoryStorageError(error_message)
+
+        if len(nodes) == 1:
+            node = next(iter(nodes.values()))
+            if edge_count != 0 or node.status is MemoryStatus.SUPERSEDED:
+                raise MemoryStorageError(error_message)
+            return [node.memory_id], proposal_hashes
+
+        if edge_count != len(nodes) - 1:
+            raise MemoryStorageError(error_message)
+        heads = [
+            node for node in nodes.values() if replacement_counts[node.memory_id] == 0
+        ]
+        if len(heads) != 1 or heads[0].status is not MemoryStatus.ACTIVE:
+            raise MemoryStorageError(error_message)
+        if any(
+            node.status is not MemoryStatus.SUPERSEDED
+            for node in nodes.values()
+            if node.memory_id != heads[0].memory_id
+        ):
+            raise MemoryStorageError(error_message)
+
+        ordered_ids: list[str] = []
+        current: _ReplacementNode | None = heads[0]
+        while current is not None:
+            if current.memory_id in ordered_ids:
+                raise MemoryStorageError(error_message)
+            ordered_ids.append(current.memory_id)
+            current = (
+                nodes[current.supersedes_id]
+                if current.supersedes_id is not None
+                else None
+            )
+        if len(ordered_ids) != len(nodes):
+            raise MemoryStorageError(error_message)
+        return ordered_ids, proposal_hashes
 
     def _record_from_row(self, row: sqlite3.Row) -> MemoryRecord:
         model_id = row["embedding_model_id"]

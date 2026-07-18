@@ -305,7 +305,7 @@ def _format_memory_record(record: MemoryRecord) -> str:
     return (
         f"[{record.memory_id}] {record.status.value} "
         f"{record.memory_type.value} {record.memory_key}\n"
-        f"  {_format_snippet(record.content)}"
+        f"  {record.content}"
     )
 
 

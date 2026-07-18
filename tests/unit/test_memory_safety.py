@@ -81,12 +81,48 @@ def test_safety_policy_rejects_sensitive_terms_in_every_input_position(
 
 
 @pytest.mark.parametrize(
+    "secret_text",
+    [
+        "我的密码是 correct-horse-battery-staple",
+        "API 密钥：cn-provider-secret-123456",
+        "访问令牌=zhsecret123456",
+        "私钥保存在这个字段中",
+    ],
+)
+@pytest.mark.parametrize("position", [0, 1, 2], ids=["raw", "key", "content"])
+def test_safety_policy_rejects_chinese_secret_indicators_in_every_input_position(
+    secret_text: str,
+    position: int,
+) -> None:
+    values = ["普通更新", "project.topic", "普通学习内容"]
+    values[position] = secret_text
+
+    assert LocalMemorySafetyPolicy().allows(*values) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        "github_pat_11AABBCCDDEEFF001122334455667788",
+        "AKIAABCDEFGHIJKLMNOP",
+    ],
+)
+def test_safety_policy_rejects_common_secret_formats(value: str) -> None:
+    assert LocalMemorySafetyPolicy().allows(value) is False
+
+
+@pytest.mark.parametrize(
     "message",
     [
         "My goal is to become an AI Engineer.",
         "I prefer concise explanations.",
         "I am working on a Personal Knowledge Agent.",
         "I have completed the RAG retrieval module.",
+        "我的目标是学习密码学基础。",
+        "我的目标是学习遗传密码子。",
+        "我正在研究公钥基础设施。",
+        "我正在学习自然语言处理中的令牌化。",
     ],
 )
 def test_safety_policy_allows_normal_learning_examples(message: str) -> None:

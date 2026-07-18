@@ -1152,6 +1152,87 @@ def test_forget_removes_entire_bidirectional_replacement_chain_only(
     assert read_rows(database, "SELECT status FROM memories") == [("active",)]
 
 
+@pytest.mark.parametrize("corruption", ["cross-slot", "branch", "cycle"])
+def test_forget_fails_closed_when_replacement_component_is_not_a_valid_chain(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    database = tmp_path / "memory.db"
+    store = make_store(
+        database,
+        ids=(_FIRST_ID, _SECOND_ID, _THIRD_ID),
+    )
+    first = store.remember(MemoryType.GOAL, "goal.agent", "First goal")
+    if corruption == "cross-slot":
+        second = store.remember(
+            MemoryType.PROJECT,
+            "project.rag",
+            "Unrelated project",
+        )
+        records = (first, second)
+        updates = (
+            ("superseded", None, first.memory_id),
+            ("active", first.memory_id, second.memory_id),
+        )
+    elif corruption == "branch":
+        second = store.remember(
+            MemoryType.GOAL,
+            "goal.agent",
+            "Second goal",
+            action=MemoryActivationAction.KEEP_BOTH,
+        )
+        third = store.remember(
+            MemoryType.GOAL,
+            "goal.agent",
+            "Third goal",
+            action=MemoryActivationAction.KEEP_BOTH,
+        )
+        records = (first, second, third)
+        updates = (
+            ("superseded", None, first.memory_id),
+            ("active", first.memory_id, second.memory_id),
+            ("active", first.memory_id, third.memory_id),
+        )
+    else:
+        second = store.remember(
+            MemoryType.GOAL,
+            "goal.agent",
+            "Second goal",
+            action=MemoryActivationAction.KEEP_BOTH,
+        )
+        records = (first, second)
+        updates = (
+            ("superseded", second.memory_id, first.memory_id),
+            ("superseded", first.memory_id, second.memory_id),
+        )
+
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "UPDATE memories SET status = ?, supersedes_id = ? WHERE memory_id = ?",
+            updates,
+        )
+        connection.executemany(
+            "INSERT INTO memory_rejections(proposal_hash, rejected_at) VALUES (?, ?)",
+            (
+                (
+                    memory_proposal_hash(
+                        record.memory_type,
+                        record.memory_key,
+                        record.content,
+                    ),
+                    _FIXED_TIME.isoformat(),
+                )
+                for record in records
+            ),
+        )
+    before = snapshot_memory_tables(database)
+
+    with pytest.raises(MemoryStorageError, match="replacement lifecycle"):
+        store.forget(first.memory_id)
+
+    assert snapshot_memory_tables(database) == before
+
+
 @pytest.mark.parametrize(
     ("mutation", "parameters"),
     [

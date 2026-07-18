@@ -544,6 +544,66 @@ def test_memory_remember_list_and_search_persist_without_language_model(
     assert model.calls == []
 
 
+def test_memory_pending_list_displays_full_content_before_approval(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    sentinel = "TAIL-SENTINEL"
+    content = "x" * (500 - len(sentinel)) + sentinel
+    seed_pending_memory(database, MemoryType.GOAL, "goal.long", content)
+
+    pending = run_cli(
+        "memory",
+        "list",
+        "--status",
+        "pending",
+        "--memory-db",
+        str(database),
+    )
+    identifier = re.search(r"\[(mem_[0-9a-f]{32})\]", pending.stdout)
+    assert identifier is not None
+    approved = run_cli(
+        "memory",
+        "approve",
+        identifier.group(1),
+        "--memory-db",
+        str(database),
+    )
+
+    assert content in pending.stdout
+    assert sentinel in pending.stdout
+    assert approved.returncode == 0
+    assert approved.stdout == f"Approved [{identifier.group(1)}] active\n"
+
+
+def test_memory_remember_rejects_chinese_secret_without_writing(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "memory.db"
+    model = FakeLanguageModel(RuntimeError("must not be called"))
+
+    result = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.credentials",
+        "我的 API密钥：cn-provider-secret-123456",
+        "--memory-db",
+        str(database),
+        language_model=model,
+        environment={},
+    )
+
+    assert result.returncode == 1
+    assert "unsafe" in result.stderr.casefold()
+    assert model.calls == []
+    with sqlite3.connect(database) as connection:
+        memory_count = connection.execute("SELECT COUNT(*) FROM memories").fetchone()
+    assert memory_count == (0,)
+
+
 def test_memory_search_empty_database_is_success_without_model_settings(
     tmp_path: Path,
 ) -> None:
@@ -1470,8 +1530,12 @@ def test_agent_candidate_lists_all_conflicts_and_preserves_memory_database(
             "My goal is to keep api_key=sk-provider-secret-123456789.",
             "sensitive input",
         ),
+        (
+            "我的目标是轮换 API密钥：cn-provider-secret-123456。",
+            "sensitive input",
+        ),
     ],
-    ids=["input-too-long", "sensitive-input"],
+    ids=["input-too-long", "english-sensitive-input", "chinese-sensitive-input"],
 )
 def test_agent_local_memory_guards_skip_before_extraction_call(
     tmp_path: Path,
@@ -1483,7 +1547,8 @@ def test_agent_local_memory_guards_skip_before_extraction_call(
     knowledge_database = tmp_path / "knowledge.db"
     memory_database = tmp_path / "memory.db"
     document.write_text(
-        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence.",
+        "# RAG\n\nMy goal is to build a portfolio-ready agent with retrieval evidence. "
+        "API密钥 rotation.",
         encoding="utf-8",
     )
     run_cli("ingest", str(document), "--db", str(knowledge_database))
@@ -1524,6 +1589,52 @@ def test_agent_local_memory_guards_skip_before_extraction_call(
     assert len(model.calls) == 2
     assert "sk-provider-secret-123456789" not in result.stdout + result.stderr
     assert not memory_database.exists()
+
+
+def test_agent_candidate_displays_full_content_before_approval(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "rag.md"
+    knowledge_database = tmp_path / "knowledge.db"
+    memory_database = tmp_path / "memory.db"
+    sentinel = "TAIL-SENTINEL"
+    content = "x" * (500 - len(sentinel)) + sentinel
+    document.write_text("# RAG\n\nretrieval evidence", encoding="utf-8")
+    run_cli("ingest", str(document), "--db", str(knowledge_database))
+    model = ScriptedLanguageModel(
+        [
+            ModelOutput(
+                "router",
+                '{"action":"retrieve","direct_intent":null}',
+                "stop",
+            ),
+            ModelOutput(
+                "answer",
+                '{"status":"answered","answer":"Grounded. [S1]","citation_ids":["S1"]}',
+                "stop",
+            ),
+            ModelOutput(
+                "extractor",
+                '{"candidates":[{"type":"goal","key":"goal.long",'
+                f'"content":"{content}"}}]}}',
+                "stop",
+            ),
+        ]
+    )
+
+    result = run_cli(
+        "agent",
+        "My goal is to record a durable long-term objective.",
+        "--db",
+        str(knowledge_database),
+        "--memory-db",
+        str(memory_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert content in result.stdout
+    assert sentinel in result.stdout
 
 
 def test_agent_extraction_prompt_contains_only_policy_and_current_message(
