@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import sqlite3
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
@@ -739,7 +740,8 @@ def test_memory_replace_keep_both_and_forget_chain_across_processes(
 def test_memory_bare_conflicts_report_ids_and_actionable_follow_up_commands(
     tmp_path: Path,
 ) -> None:
-    database = tmp_path / "memory.db"
+    database = tmp_path / "memory db's" / "custom memory.db"
+    quoted_database = shlex.quote(str(database))
     first = run_cli(
         "memory",
         "remember",
@@ -771,11 +773,13 @@ def test_memory_bare_conflicts_report_ids_and_actionable_follow_up_commands(
     assert f"Active IDs: {active_id}" in remember_conflict.stderr
     assert (
         "pka memory remember --type goal --key goal.ai_engineer "
-        f"--replace {active_id} CONTENT"
+        f"--replace {active_id} --memory-db {quoted_database} CONTENT"
     ) in remember_conflict.stderr
     assert (
-        "pka memory remember --type goal --key goal.ai_engineer --keep-both CONTENT"
+        "pka memory remember --type goal --key goal.ai_engineer "
+        f"--keep-both --memory-db {quoted_database} CONTENT"
     ) in remember_conflict.stderr
+    assert "Build a second AI portfolio." not in remember_conflict.stderr
     assert "Traceback" not in remember_conflict.stderr
 
     seed_pending_memory(
@@ -822,15 +826,58 @@ def test_memory_bare_conflicts_report_ids_and_actionable_follow_up_commands(
     assert approval_conflict.returncode == 1
     assert f"Active IDs: {active_id}" in approval_conflict.stderr
     assert (
-        f"pka memory approve {candidate_id} --replace {active_id}"
-        in approval_conflict.stderr
+        f"pka memory approve {candidate_id} --replace {active_id} "
+        f"--memory-db {quoted_database}" in approval_conflict.stderr
     )
-    assert f"pka memory approve {candidate_id} --keep-both" in approval_conflict.stderr
+    assert (
+        f"pka memory approve {candidate_id} --keep-both --memory-db {quoted_database}"
+    ) in approval_conflict.stderr
+    assert "Pending AI Engineer candidate." not in approval_conflict.stderr
     assert "Traceback" not in approval_conflict.stderr
     assert candidate_id in pending_after.stdout
     assert "Pending AI Engineer candidate." in pending_after.stdout
     assert candidate_id not in active_search.stdout
     assert "Pending AI Engineer candidate." not in active_search.stdout
+
+
+def test_memory_conflict_guidance_keeps_default_database_path_clear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Become an AI Engineer.",
+    )
+    active_match = re.search(r"\[(mem_[0-9a-f]{32})\]", first.stdout)
+    assert active_match is not None
+    active_id = active_match.group(1)
+
+    conflict = run_cli(
+        "memory",
+        "remember",
+        "--type",
+        "goal",
+        "--key",
+        "goal.ai_engineer",
+        "Private second goal.",
+    )
+
+    assert conflict.returncode == 1
+    assert (
+        "pka memory remember --type goal --key goal.ai_engineer "
+        f"--replace {active_id} --memory-db .pka/memory.db CONTENT"
+    ) in conflict.stderr
+    assert (
+        "pka memory remember --type goal --key goal.ai_engineer "
+        "--keep-both --memory-db .pka/memory.db CONTENT"
+    ) in conflict.stderr
+    assert "Private second goal." not in conflict.stderr
 
 
 def test_memory_invalid_unsafe_unknown_and_conflicting_operations_are_safe(

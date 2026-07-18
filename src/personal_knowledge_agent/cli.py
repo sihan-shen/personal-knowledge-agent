@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -256,6 +257,10 @@ def _memory_store(database: Path) -> SQLiteMemoryStore:
     return SQLiteMemoryStore(database, E5Embedder())
 
 
+def _memory_database_argument(database: Path) -> str:
+    return f"--memory-db {shlex.quote(str(database))}"
+
+
 def _memory_activation_action(
     replace_id: str | None,
     keep_both: bool,
@@ -327,13 +332,15 @@ def _memory_remember(
         if not active_ids:
             raise
         joined = ", ".join(active_ids)
+        database_argument = _memory_database_argument(database)
         raise MemoryConflictError(
             f"Active memory conflict. Active IDs: {joined}\n"
             "Retry with one of:\n"
             f"  pka memory remember --type {memory_type.value} "
-            f"--key {memory_key} --replace {active_ids[0]} CONTENT\n"
+            f"--key {memory_key} --replace {active_ids[0]} "
+            f"{database_argument} CONTENT\n"
             f"  pka memory remember --type {memory_type.value} "
-            f"--key {memory_key} --keep-both CONTENT"
+            f"--key {memory_key} --keep-both {database_argument} CONTENT"
         ) from error
     print(f"Remembered {_format_memory_record(record)}")
 
@@ -395,11 +402,13 @@ def _memory_approve(
         if not active_ids:
             raise
         joined = ", ".join(active_ids)
+        database_argument = _memory_database_argument(database)
         raise MemoryConflictError(
             f"Active memory conflict. Active IDs: {joined}\n"
             "Retry with one of:\n"
-            f"  pka memory approve {candidate_id} --replace {active_ids[0]}\n"
-            f"  pka memory approve {candidate_id} --keep-both"
+            f"  pka memory approve {candidate_id} --replace {active_ids[0]} "
+            f"{database_argument}\n"
+            f"  pka memory approve {candidate_id} --keep-both {database_argument}"
         ) from error
     print(f"Approved [{record.memory_id}] {record.status.value}")
 
