@@ -284,6 +284,8 @@ request order.
 For a non-fallback retrieve route:
 
 1. retrieve document results using the existing `SearchService` and CLI `--limit`;
+   treat `KnowledgeBaseEmptyError` as an empty document context on this memory-aware
+   path so a confirmed memory can independently support an answer;
 2. recall memories with the fixed Phase 3B memory limit of three;
 3. convert document results to `S1...Sn` evidence;
 4. if both evidence collections are empty, return the existing local insufficient
@@ -297,9 +299,10 @@ Memory recall itself makes zero remote calls. It may load local E5. Provider SDK
 retries can still turn the single logical answer request into multiple billable
 attempts.
 
-The service does not catch document-index or answer-model failures that already fail
-the existing RAG path. It catches only optional recall failures that have an
-approved safe degradation.
+Except for the expected empty-knowledge-base condition above, the service does not
+catch document-index or answer-model failures that already fail the existing RAG
+path. It catches only optional recall failures that have an approved safe
+degradation.
 
 ## Lazy route composition
 
@@ -404,6 +407,7 @@ values reach the provider.
 | Embedding failure | Send no memories and continue document RAG | `Memory recall skipped: embedding error` |
 | SQLite/schema/validation failure | Send no memories and continue document RAG | `Memory recall skipped: storage error` |
 | Slot has more than three active values | Skip that slot; other safe slots may remain | `Memory recall skipped: ambiguous memory slot` |
+| Knowledge database is empty and valid memory exists | Treat documents as empty and make a memory-only request | Normal answer output |
 | No documents, valid memories exist | Make a memory-only answer request | Normal answer output |
 | No documents and no accepted memories | Return local insufficient evidence | No answer-model call |
 | Answer provider or parser failure | Preserve current command failure | Existing safe `KnowledgeError` handling |
