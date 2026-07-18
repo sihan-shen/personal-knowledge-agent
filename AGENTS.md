@@ -71,5 +71,11 @@ gate before a feature is merged.
 - Phase 2A is complete: provider-neutral grounded-answer contracts, an
   OpenAI-compatible Chat Completions adapter, strict JSON/citation validation, and
   the `pka ask` composition root.
-- PDF/web/code ingestion, agent routing, memory, knowledge graphs, evaluation, and
-  deployment are future phases.
+- Phase 2B is complete: conservative local/LLM routing, visible route decisions,
+  safe direct templates, and fail-closed delegation to grounded retrieval.
+- Phase 3A is complete: confirmation-gated long-term-memory proposals, explicit
+  administration, lifecycle persistence, and active-only hybrid memory search.
+- Phase 3B will add automatic retrieval and prompt injection of relevant active
+  memories for answers, with visible request-local memory use.
+- PDF/web/code ingestion, knowledge graphs, evaluation, and deployment remain future
+  work.

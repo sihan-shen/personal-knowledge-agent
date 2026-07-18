@@ -4,12 +4,13 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 2B provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+Phase 3A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
 and hybrid retrieval, evidence-grounded answers through an OpenAI-compatible Chat
-Completions endpoint, and a conservative Agent router. Embeddings run locally on CPU
-and are stored in SQLite alongside the BM25 index. `pka ask` remains a fixed RAG
-pipeline that always retrieves; `pka agent` visibly chooses a safe local direct
-response or the same grounded retrieval path.
+Completions endpoint, a conservative Agent router, and confirmation-gated long-term
+memory. Embeddings run locally on CPU and are stored in SQLite alongside each BM25
+index. `pka ask` remains a fixed RAG pipeline that always retrieves; `pka agent`
+visibly chooses a safe local direct response or the same grounded retrieval path,
+then may propose a memory after a successful response.
 
 ## Prerequisites
 
@@ -195,6 +196,119 @@ more than one billable request. Authentication, permission, bad-request, rate-li
 timeout, connection, server, truncation, schema, and citation failures become concise
 CLI errors without echoing provider payloads. Automated tests use deterministic
 fakes and never call DeepSeek or incur API cost.
+
+## Manage confirmation-gated long-term memory
+
+Phase 3A stores long-term memory in a dedicated SQLite database. The default is
+`.pka/memory.db`, separate from the knowledge index. Every memory has one of four
+types: `preference`, `goal`, `project`, or `learning_progress`. Use `--memory-db` on
+`pka agent` or any explicit memory command to select a different database:
+
+```bash
+uv run pka agent \
+  "My goal is to finish an AI Engineer portfolio project." \
+  --db data/knowledge.db \
+  --memory-db data/memory.db
+```
+
+Keys are explicit lower-case ASCII slots matching
+`[a-z][a-z0-9_.-]{0,63}`, and stored content is limited to 500 Unicode code points.
+Automatic extraction accepts at most 4,000 code points from the current message and
+at most three candidates; an over-limit message is skipped locally instead of being
+truncated or sent for extraction.
+
+After a successful Agent response, a local first-person prefilter may allow one
+structured extraction request. The model can only propose candidates; it cannot
+activate them. Proposed records remain `pending` and do not appear in memory search
+until the user explicitly approves them:
+
+```bash
+uv run pka memory list --status pending
+uv run pka memory approve mem_candidate
+```
+
+An explicit `remember` command is itself the user's authorization, so it creates an
+`active` memory directly. The stable key names the fact's local slot:
+
+```bash
+uv run pka memory remember \
+  --type goal \
+  --key goal.ai_engineer_internship \
+  "Complete a portfolio-ready Personal Knowledge Agent"
+```
+
+If that type-and-key slot already has an active record, a bare approval or remember
+fails and prints the conflicting IDs. Choose the conflict outcome explicitly:
+
+```bash
+# Atomically supersede one existing active value.
+uv run pka memory remember \
+  --type goal \
+  --key goal.ai_engineer_internship \
+  --replace mem_old \
+  "Complete a production-ready Personal Knowledge Agent"
+
+# Deliberately preserve both active values in the same slot.
+uv run pka memory remember \
+  --type goal \
+  --key goal.ai_engineer_internship \
+  --keep-both \
+  "Publish the Personal Knowledge Agent as an open-source project"
+
+# The same two choices apply when approving an automatic candidate.
+uv run pka memory approve mem_candidate --replace mem_old
+uv run pka memory approve mem_candidate --keep-both
+```
+
+List records newest first, optionally filtering their lifecycle status or type.
+Search uses local BM25 and E5 cosine rankings fused with RRF, returns `active`
+records only, accepts a limit from 1 to 20, and can filter by type:
+
+```bash
+uv run pka memory list
+uv run pka memory list --status superseded
+uv run pka memory list --type project
+uv run pka memory search "What am I learning?" --limit 5
+uv run pka memory search "current projects" --type project
+```
+
+Rejecting removes a pending candidate's content and keeps only a one-way fingerprint
+so the same proposal is not recreated. Forgetting any record hard-deletes its entire
+connected replacement chain, including postings, vectors, and matching rejection
+fingerprints; there is no undo command:
+
+```bash
+uv run pka memory reject mem_candidate
+uv run pka memory forget mem_active
+```
+
+### Phase boundary, provider disclosure, and cost
+
+Phase 3A implements the complete memory lifecycle but does **not** retrieve active
+memories for routing or answer generation. Pending, active, and superseded records
+do not influence `pka agent` or `pka ask` answers yet. Phase 3B will design active
+memory recall, prompt injection, and visible memory use separately.
+
+Automatic extraction happens only after a successful `pka agent` answer. A local
+prefilter miss adds zero model calls. If the prefilter hits and the raw message passes
+the local safety screen, the configured provider receives the current user message
+in one additional extraction request. Existing memories, knowledge evidence, local
+paths, hashes, timestamps, embeddings, and credentials are not included in that
+request. Provider SDK retries can turn one logical extraction request into multiple
+billable attempts, so the prefilter is a cost guard rather than a billing guarantee.
+
+Every explicit `pka memory remember/list/search/approve/reject/forget` command makes
+zero remote model calls. Local writes and searches may load the E5 embedding model.
+The local safety policy screens the raw message before automatic extraction and
+screens each proposed key and content again before persistence; explicit remembers
+receive the same persisted-content screen. This is conservative defence in depth,
+not a complete personal-data classifier, and Phase 3A has no override flag.
+
+The memory database is local but unencrypted. Protect the host filesystem and do not
+store secrets, identity documents, health, financial, or privileged legal data.
+Reject and forget hard-delete application records, but the project cannot guarantee
+physical secure erasure from SQLite pages, filesystem snapshots, operating-system
+caches, or provider systems.
 
 ## Quality checks
 
