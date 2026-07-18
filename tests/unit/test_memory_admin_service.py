@@ -172,7 +172,7 @@ def test_list_returns_store_records_with_filters_unchanged() -> None:
 
 
 def test_search_returns_store_results_and_options_unchanged() -> None:
-    expected = [MemorySearchResult(_record(), 0.75)]
+    expected = [MemorySearchResult(_record(), 0.75, 0.8)]
     store = FakeMemoryStore(search_result=expected)
     service = MemoryAdminService(store, RecordingSafetyPolicy(True))
 

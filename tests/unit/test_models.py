@@ -5,6 +5,7 @@ from math import inf, nan
 
 import pytest
 
+from personal_knowledge_agent.domain.memory import MemoryRecallReport
 from personal_knowledge_agent.domain.models import (
     AgentResponse,
     AnswerStatus,
@@ -16,6 +17,7 @@ from personal_knowledge_agent.domain.models import (
     Evidence,
     GroundedAnswer,
     IngestionResult,
+    MemoryAwareAnswerResult,
     MessageRole,
     ModelOutput,
     RouteAction,
@@ -293,6 +295,43 @@ def test_agent_response_answer_kind_must_match_route() -> None:
         AgentResponse(direct_route, None, grounded)
     with pytest.raises(ValueError, match="retrieve route"):
         AgentResponse(retrieve_route, "hello", None)
+
+
+def test_memory_aware_result_and_agent_response_keep_recall_report() -> None:
+    grounded = GroundedAnswer(
+        AnswerStatus.INSUFFICIENT_EVIDENCE,
+        "Not enough evidence.",
+        (),
+        (),
+        None,
+    )
+    report = MemoryRecallReport((), ())
+    result = MemoryAwareAnswerResult(grounded, report)
+    route = RouteDecision(RouteAction.RETRIEVE, None, RouteSource.LLM)
+
+    response = AgentResponse(route, None, result.answer, result.recall)
+
+    assert result.recall is report
+    assert response.memory_recall is report
+
+
+def test_fallback_agent_response_rejects_memory_recall_report() -> None:
+    grounded = GroundedAnswer(
+        AnswerStatus.INSUFFICIENT_EVIDENCE,
+        "Not enough evidence.",
+        (),
+        (),
+        None,
+    )
+    route = RouteDecision(
+        RouteAction.RETRIEVE,
+        None,
+        RouteSource.FALLBACK,
+        RouterFallbackReason.PROVIDER_ERROR,
+    )
+
+    with pytest.raises(ValueError, match="fallback"):
+        AgentResponse(route, None, grounded, MemoryRecallReport((), ()))
 
 
 def test_agent_response_is_frozen() -> None:

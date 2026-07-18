@@ -9,6 +9,7 @@ from typing import Protocol
 from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
     MemoryProposal,
+    MemoryRecallReport,
     MemoryRecord,
     MemorySearchResult,
     MemoryStatus,
@@ -19,6 +20,8 @@ from personal_knowledge_agent.domain.models import (
     Chunk,
     Document,
     Embedding,
+    GroundedAnswer,
+    MemoryAwareAnswerResult,
     ModelOutput,
     RouteDecision,
     SearchMode,
@@ -110,6 +113,50 @@ class MemorySafetyPolicy(Protocol):
 
     def allows(self, *values: str) -> bool:
         """Return false when any supplied local text matches a prohibited category."""
+        ...
+
+
+class MemoryRelevancePolicy(Protocol):
+    """Decide whether a ranked active memory is relevant enough to disclose."""
+
+    def allows(self, query: str, result: MemorySearchResult) -> bool:
+        """Return whether the candidate passes the local relevance gate."""
+        ...
+
+
+class MemoryRecaller(Protocol):
+    """Build bounded request-local context from confirmed memories."""
+
+    def recall(self, query: str, *, limit: int = 3) -> MemoryRecallReport:
+        """Return accepted memories and safe warnings for one query."""
+        ...
+
+
+class GroundedQuestionAnswerer(Protocol):
+    """Answer with document evidence only."""
+
+    def answer(
+        self,
+        question: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.HYBRID,
+    ) -> GroundedAnswer:
+        """Return one validated document-grounded answer."""
+        ...
+
+
+class MemoryAwareQuestionAnswerer(Protocol):
+    """Answer with document and confirmed memory context."""
+
+    def answer(
+        self,
+        question: str,
+        *,
+        limit: int = 5,
+        mode: SearchMode = SearchMode.HYBRID,
+    ) -> MemoryAwareAnswerResult:
+        """Return one validated answer and its recall report."""
         ...
 
 

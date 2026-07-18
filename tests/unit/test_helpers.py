@@ -119,7 +119,7 @@ def test_fake_memory_store_returns_configured_values_and_records_all_calls() -> 
     proposal = MemoryProposal(MemoryType.GOAL, "goal.agent", "Build an agent")
     pending = _memory_record()
     active = _memory_record(MemoryStatus.ACTIVE)
-    search_result = MemorySearchResult(active, 0.75)
+    search_result = MemorySearchResult(active, 0.75, 0.8)
     store = FakeMemoryStore(
         create_pending_result=(pending,),
         remember_result=active,

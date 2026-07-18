@@ -7,6 +7,8 @@ from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
 
+from personal_knowledge_agent.domain.memory import MemoryRecallReport
+
 
 def make_document_id(source: str) -> str:
     """Create a stable identifier from a normalized document source."""
@@ -177,6 +179,14 @@ class GroundedAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryAwareAnswerResult:
+    """A validated answer paired with its local memory recall report."""
+
+    answer: GroundedAnswer
+    recall: MemoryRecallReport
+
+
+@dataclass(frozen=True, slots=True)
 class RouteDecision:
     """One validated decision about how the agent should respond."""
 
@@ -206,6 +216,7 @@ class AgentResponse:
     route: RouteDecision
     direct_answer: str | None
     grounded_answer: GroundedAnswer | None
+    memory_recall: MemoryRecallReport | None = None
 
     def __post_init__(self) -> None:
         if (self.direct_answer is None) == (self.grounded_answer is None):
@@ -214,8 +225,14 @@ class AgentResponse:
             if self.direct_answer is None:
                 raise ValueError("direct route requires a direct answer")
             _require_text(self.direct_answer, "direct_answer")
-        elif self.grounded_answer is None:
-            raise ValueError("retrieve route requires a grounded answer")
+            if self.memory_recall is not None:
+                raise ValueError("direct route must not include memory recall")
+        else:
+            if self.grounded_answer is None:
+                raise ValueError("retrieve route requires a grounded answer")
+            if self.route.source is RouteSource.FALLBACK:
+                if self.memory_recall is not None:
+                    raise ValueError("fallback route must not include memory recall")
 
 
 @dataclass(frozen=True, slots=True)

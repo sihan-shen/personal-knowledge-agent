@@ -142,9 +142,10 @@ class MemoryRecallReport:
             raise ValueError("memory recall warnings must be unique")
 ```
 
-Extend `MemorySearchResult` with required `semantic_similarity: float`, validate it
-is finite and in `[-1.0, 1.0]`, and update existing fixtures to pass an explicit
-value.
+Extend `MemorySearchResult` with `semantic_similarity: float = 0.0`, validate it is
+finite and in `[-1.0, 1.0]`, and update relevance-sensitive fixtures to pass an
+explicit value. The compatibility default keeps Task 1 independently buildable;
+Task 2 integration tests require SQLite to replace it with the real cosine.
 
 - [ ] **Step 4: Add answer result and protocol boundaries**
 
@@ -157,8 +158,10 @@ class MemoryAwareAnswerResult:
     recall: MemoryRecallReport
 ```
 
-Add `memory_recall: MemoryRecallReport | None = None` to `AgentResponse` and enforce
-the approved route/report combinations. In `domain/protocols.py`, add:
+Add `memory_recall: MemoryRecallReport | None = None` to `AgentResponse` and reject
+recall reports on direct and fallback responses. Preserve the temporarily valid
+non-fallback/no-report combination until Task 8 updates `AgentService` atomically;
+Task 8 then adds the final required-report invariant. In `domain/protocols.py`, add:
 
 ```python
 class MemoryRelevancePolicy(Protocol):
@@ -661,6 +664,9 @@ def __init__(
 After direct handling, use the old answerer only when
 `route.source is RouteSource.FALLBACK`; otherwise invoke the factory once, call the
 memory-aware answerer, and construct `AgentResponse` with its recall report.
+In the same GREEN step, tighten `AgentResponse.__post_init__` so every non-fallback
+retrieve response requires a non-`None` recall report; update its domain test to
+prove a missing report is rejected only after all production callers are migrated.
 
 - [ ] **Step 4: Run Agent and domain-model tests**
 

@@ -14,10 +14,12 @@ from uuid import uuid4
 MAX_MEMORY_CONTENT_LENGTH = 500
 MAX_MEMORY_EXTRACTION_INPUT_LENGTH = 4_000
 MAX_MEMORY_CANDIDATES = 3
+MAX_RECALLED_MEMORIES = 3
 
 _MEMORY_KEY_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _MEMORY_ID_PATTERN = re.compile(r"mem_[0-9a-f]{32}")
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+_MEMORY_CITATION_PATTERN = re.compile(r"M[1-9]\d*")
 
 
 class MemoryType(StrEnum):
@@ -57,6 +59,15 @@ class MemoryExtractionSkipReason(StrEnum):
     UNSAFE_OUTPUT = "unsafe_output"
     EMBEDDING_ERROR = "embedding_error"
     STORAGE_ERROR = "storage_error"
+
+
+class MemoryRecallWarning(StrEnum):
+    """Safe user-visible categories for optional memory recall failures."""
+
+    EMBEDDING_ERROR = "embedding_error"
+    STORAGE_ERROR = "storage_error"
+    UNSAFE_MEMORY = "unsafe_memory"
+    AMBIGUOUS_MEMORY_SLOT = "ambiguous_memory_slot"
 
 
 def _normalize_text(value: str, field_name: str) -> str:
@@ -186,10 +197,49 @@ class MemorySearchResult:
 
     memory: MemoryRecord
     score: float
+    semantic_similarity: float = 0.0
 
     def __post_init__(self) -> None:
         if not isfinite(self.score):
             raise ValueError("score must be finite")
+        if not isfinite(self.semantic_similarity) or not (
+            -1.0 <= self.semantic_similarity <= 1.0
+        ):
+            raise ValueError("semantic_similarity must be finite and between -1 and 1")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEvidence:
+    """One active memory labeled for a single answer request."""
+
+    citation_id: str
+    memory: MemoryRecord
+    retrieval_score: float
+
+    def __post_init__(self) -> None:
+        if _MEMORY_CITATION_PATTERN.fullmatch(self.citation_id) is None:
+            raise ValueError("memory citation_id must use the M request-label format")
+        if self.memory.status is not MemoryStatus.ACTIVE:
+            raise ValueError("memory evidence must reference an active record")
+        if not isfinite(self.retrieval_score):
+            raise ValueError("memory retrieval_score must be finite")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryRecallReport:
+    """Accepted request context plus safe recall warnings."""
+
+    memories: tuple[MemoryEvidence, ...]
+    warnings: tuple[MemoryRecallWarning, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.memories) > MAX_RECALLED_MEMORIES:
+            raise ValueError("memory recall exceeds the request limit")
+        expected = tuple(f"M{index}" for index in range(1, len(self.memories) + 1))
+        if tuple(item.citation_id for item in self.memories) != expected:
+            raise ValueError("memory citations must be sequential request labels")
+        if len(set(self.warnings)) != len(self.warnings):
+            raise ValueError("memory recall warnings must be unique")
 
 
 @dataclass(frozen=True, slots=True)
