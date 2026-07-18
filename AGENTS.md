@@ -75,7 +75,8 @@ gate before a feature is merged.
   safe direct templates, and fail-closed delegation to grounded retrieval.
 - Phase 3A is complete: confirmation-gated long-term-memory proposals, explicit
   administration, lifecycle persistence, and active-only hybrid memory search.
-- Phase 3B will add automatic retrieval and prompt injection of relevant active
-  memories for answers, with visible request-local memory use.
+- Phase 3B is complete: conservative active-memory recall, separated untrusted
+  prompt context, strict `S`/`M` citations, safe degradation, and visible
+  request-local memory use.
 - PDF/web/code ingestion, knowledge graphs, evaluation, and deployment remain future
   work.

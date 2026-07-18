@@ -4,13 +4,14 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 3A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+Phase 3B provides persistent Markdown ingestion, Chinese/English lexical, semantic,
 and hybrid retrieval, evidence-grounded answers through an OpenAI-compatible Chat
 Completions endpoint, a conservative Agent router, and confirmation-gated long-term
-memory. Embeddings run locally on CPU and are stored in SQLite alongside each BM25
-index. `pka ask` remains a fixed RAG pipeline that always retrieves; `pka agent`
-visibly chooses a safe local direct response or the same grounded retrieval path,
-then may propose a memory after a successful response.
+memory with conservative request-local recall. Embeddings run locally on CPU and
+are stored in SQLite alongside each BM25 index. `pka ask` remains a fixed
+document-only RAG pipeline; `pka agent` visibly chooses a safe local direct response
+or a retrieval path that may combine document evidence with confirmed active
+memories, then may propose a new memory after a successful response.
 
 ## Prerequisites
 
@@ -174,13 +175,70 @@ The hybrid router uses exact local rules first, then asks the configured model f
 one strict two-field JSON decision. A rule match makes no model request. An LLM
 direct decision makes one routing request and renders a local template. A normal
 retrieval answer usually makes two model calls—one to route and one to generate the
-grounded answer—although empty retrieval returns a local refusal after the routing
-call. Provider or invalid-JSON routing failures are displayed as safe fallback
-categories and fail closed to retrieval; raw provider details are not printed.
+grounded answer. Local memory recall adds no remote request. If both document and
+memory context are empty, the Agent refuses locally after the routing call. Provider
+or invalid-JSON routing failures are displayed as safe fallback categories and fail
+closed to retrieval; raw provider details are not printed.
 
 Only the question is sent during LLM routing. Retrieved chunks are sent later only
 when the chosen route is `retrieve`. `pka ask` remains available when you explicitly
 want retrieval without a routing call.
+
+### Use active memory in Agent answers
+
+On a normal non-fallback `retrieve` route, the Agent searches the selected
+`--memory-db` for confirmed `active` memories. Direct routes, fail-closed fallback
+routes, and `pka ask` do not construct or query the memory store for answering.
+Pending and superseded records are never eligible.
+
+Recall is deliberately stricter than ranking. It inspects at most 12 active
+candidates, then accepts a slot only when it has meaningful Chinese/English token
+overlap with the query or cosine similarity of at least `0.84`. At most three memory
+items enter one request. All active values under the same `(type, key)` slot are
+handled atomically: a keep-both slot is either included completely or omitted. A
+slot with more than three active values is omitted with a safe ambiguity warning;
+one unsafe peer omits the complete slot.
+
+A memory-only answer can look like:
+
+```text
+Route: retrieve (llm)
+Answer:
+You prefer concise answers. [M1]
+
+Memories used:
+[M1] preference.answer_style — Prefer concise answers.
+```
+
+A mixed answer keeps document and memory citations separate:
+
+```text
+Route: retrieve (llm)
+Answer:
+Use retrieval evidence for your portfolio project. [S1] [M1]
+
+Sources:
+[S1] /local/notes/rag.md > RAG
+
+Memories used:
+[M1] goal.rag_project — Build a portfolio-ready RAG project.
+```
+
+Only cited context is displayed, and empty `Sources` or `Memories used` sections are
+omitted. Recall failures degrade to document-only RAG with fixed labels such as
+`embedding error`, `storage error`, `unsafe memory`, or `ambiguous memory slot`;
+private exception details are not printed. With neither documents nor accepted
+memories, the Agent returns a local insufficient-evidence response without an answer
+model call.
+
+Document evidence and personal memory have different authority. `S` context may
+support external factual claims; `M` context may support only user-specific
+preferences, goals, project state, and learning progress. Both arrays are serialized
+as untrusted data. The provider-visible memory fields are exactly the request-local
+`citation_id` and normalized `content`; stable memory IDs, type/key, hashes,
+timestamps, scores, vectors, database paths, and credentials remain local. The full
+type/key/content line under `Memories used` is rendered locally after strict citation
+validation.
 
 The adapter requests one non-streaming JSON object through Chat Completions. JSON
 mode only helps the provider produce syntactically valid JSON; the project still
@@ -282,12 +340,11 @@ uv run pka memory reject mem_candidate
 uv run pka memory forget mem_active
 ```
 
-### Phase boundary, provider disclosure, and cost
+### Provider disclosure, cost, and storage limits
 
-Phase 3A implements the complete memory lifecycle but does **not** retrieve active
-memories for routing or answer generation. Pending, active, and superseded records
-do not influence `pka agent` or `pka ask` answers yet. Phase 3B will design active
-memory recall, prompt injection, and visible memory use separately.
+Phase 3B adds active-memory recall only to eligible Agent retrieval answers. It does
+not add chat history, memory-influenced routing, automatic approval, or memory use in
+`pka ask`. Retrieval is request-local and does not rewrite stored records.
 
 Automatic extraction is considered only after a successful `pka agent` answer on a
 non-fallback route. If a router provider or parsing error triggers fail-closed
@@ -302,6 +359,11 @@ prefilter is a cost guard rather than a billing guarantee.
 
 Every explicit `pka memory remember/list/search/approve/reject/forget` command makes
 zero remote model calls. Local writes and searches may load the E5 embedding model.
+Eligible Agent recall also makes zero remote calls, but it may initialize SQLite and
+load E5 before the existing answer request. An allowed Phase 3A extraction remains
+one additional logical provider request after the validated answer; SDK retries can
+still increase the billable request count.
+
 The local safety policy screens the raw message before automatic extraction and
 screens each proposed key and content again before persistence; explicit remembers
 receive the same persisted-content screen. This is conservative defence in depth,
@@ -311,7 +373,9 @@ The memory database is local but unencrypted. Protect the host filesystem and do
 store secrets, identity documents, health, financial, or privileged legal data.
 Reject and forget hard-delete application records, but the project cannot guarantee
 physical secure erasure from SQLite pages, filesystem snapshots, operating-system
-caches, or provider systems.
+caches, or provider systems. A recalled memory is transmitted to the configured
+external answer provider, whose retention and training policies are outside this
+project's control.
 
 ## Quality checks
 
