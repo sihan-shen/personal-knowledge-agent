@@ -573,7 +573,7 @@ class SQLiteMemoryStore:
                     memory_type=memory_type,
                     limit=candidate_limit,
                 )
-                semantic_ids = self._semantic_memory_ids(
+                semantic_ids, semantic_scores = self._semantic_memory_ranking(
                     connection,
                     query,
                     memory_type=memory_type,
@@ -588,6 +588,7 @@ class SQLiteMemoryStore:
                     MemorySearchResult(
                         memory=self._record_by_id(connection, memory_id),
                         score=score,
+                        semantic_similarity=semantic_scores[memory_id],
                     )
                     for memory_id, score in fused
                 ]
@@ -657,14 +658,14 @@ class SQLiteMemoryStore:
             if score > 0
         ]
 
-    def _semantic_memory_ids(
+    def _semantic_memory_ranking(
         self,
         connection: sqlite3.Connection,
         query: str,
         *,
         memory_type: MemoryType | None,
         limit: int,
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, float]]:
         query_embedding = self._embedding_model.embed_query(query)
         if query_embedding.model_id != self._embedding_model.model_id:
             raise EmbeddingError(
@@ -688,7 +689,7 @@ class SQLiteMemoryStore:
             parameters,
         ).fetchall()
 
-        ranked: list[tuple[str, float]] = []
+        scores: dict[str, float] = {}
         query_dimensions = len(query_embedding.values)
         for row in rows:
             memory_id = self._require_stored_memory_id(row, "memory_id")
@@ -717,11 +718,13 @@ class SQLiteMemoryStore:
                     strict=True,
                 )
             )
-            if score > 0:
-                ranked.append((memory_id, score))
+            scores[memory_id] = score
 
-        ranked.sort(key=lambda item: (-item[1], item[0]))
-        return [memory_id for memory_id, _ in ranked[:limit]]
+        ranked = sorted(
+            ((memory_id, score) for memory_id, score in scores.items() if score > 0),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return [memory_id for memory_id, _ in ranked[:limit]], scores
 
     def _initialize_schema(self) -> None:
         with closing(self._open()) as connection:

@@ -494,6 +494,7 @@ def test_search_ranks_higher_bm25_term_frequency(tmp_path: Path) -> None:
         occasional.memory_id,
     ]
     assert [result.score for result in results] == pytest.approx([1 / 61, 1 / 62])
+    assert [result.semantic_similarity for result in results] == [0.0, 0.0]
 
 
 def test_search_supports_chinese_and_mixed_language_terms(tmp_path: Path) -> None:
@@ -538,6 +539,9 @@ def test_search_orders_only_positive_cosine_candidates(tmp_path: Path) -> None:
         partial.memory_id,
     ]
     assert [result.score for result in results] == pytest.approx([1 / 61, 1 / 62])
+    assert [result.semantic_similarity for result in results] == pytest.approx(
+        [1.0, 2**-0.5]
+    )
     assert embedder.query_calls == ["semantic question"]
 
 
@@ -595,6 +599,7 @@ def test_search_fuses_lexical_and_semantic_rankings_by_memory_id(
         "project.shared",
         "hybrid shared",
     )
+    before = snapshot_memory_tables(database)
 
     results = store.search("hybrid question")
 
@@ -605,6 +610,17 @@ def test_search_fuses_lexical_and_semantic_rankings_by_memory_id(
     }
     assert results[0].score == pytest.approx(2 / 62)
     assert results[1].score == pytest.approx(1 / 61)
+    similarities = {
+        result.memory.memory_id: result.semantic_similarity for result in results
+    }
+    assert similarities == pytest.approx(
+        {
+            lexical_first.memory_id: 0.0,
+            semantic_first.memory_id: 1.0,
+            shared.memory_id: 2**-0.5,
+        }
+    )
+    assert snapshot_memory_tables(database) == before
 
 
 @pytest.mark.parametrize("limit", [0, 21])
