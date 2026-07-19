@@ -6,6 +6,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+from personal_knowledge_agent.domain.graph import (
+    EntityNeighborhood,
+    EntitySearchResult,
+    GraphBuildResult,
+    GraphChunkExtraction,
+    GraphSourceDocument,
+)
 from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
     MemoryProposal,
@@ -216,4 +223,53 @@ class MemoryStore(Protocol):
         memory_type: MemoryType | None = None,
     ) -> list[MemorySearchResult]:
         """Return ranked active memories matching a query."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Graph protocols
+# ---------------------------------------------------------------------------
+
+
+class GraphSourceReader(Protocol):
+    """Load one indexed source document for building a graph."""
+
+    def load(self, source: Path) -> GraphSourceDocument:
+        """Return the current source metadata and ordered chunks."""
+        ...
+
+
+class KnowledgeGraphExtractor(Protocol):
+    """Extract validated entities and relations from one chunk."""
+
+    def extract(self, chunk: Chunk) -> GraphChunkExtraction:
+        """Return one validated chunk extraction."""
+        ...
+
+
+class KnowledgeGraphStore(Protocol):
+    """Persist graph facts and support local queries."""
+
+    def replace_document(
+        self,
+        source_document: GraphSourceDocument,
+        extractions: Sequence[GraphChunkExtraction],
+    ) -> GraphBuildResult:
+        """Atomically replace one document's graph contribution."""
+        ...
+
+    def search_entities(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[EntitySearchResult]:
+        """Return BM25-ranked entity matches."""
+        ...
+
+    def get_neighborhood(
+        self,
+        entity_id: str,
+    ) -> EntityNeighborhood:
+        """Return one entity with its inbound and outbound relations."""
         ...

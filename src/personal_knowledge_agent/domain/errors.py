@@ -87,3 +87,31 @@ class MemoryStorageError(MemoryFeatureError):
 
 class InvalidMemorySchemaError(MemoryFeatureError):
     """Raised when extracted output violates the memory schema."""
+
+
+class GraphFeatureError(KnowledgeError):
+    """Base class for user-facing knowledge-graph errors."""
+
+
+class InvalidGraphError(GraphFeatureError):
+    """Raised when a graph operation receives invalid input."""
+
+
+class GraphSourceNotFoundError(GraphFeatureError):
+    """Raised when the requested source is not in the knowledge index."""
+
+
+class GraphEmptyError(GraphFeatureError):
+    """Raised when the graph database contains no entities."""
+
+
+class GraphEntityNotFoundError(GraphFeatureError):
+    """Raised when a requested entity does not exist in the graph."""
+
+
+class GraphStorageError(GraphFeatureError):
+    """Raised when the persistent graph store cannot complete an operation."""
+
+
+class InvalidGraphSchemaError(GraphFeatureError):
+    """Raised when graph extraction output violates the expected schema."""
