@@ -2650,3 +2650,29 @@ def test_ask_reports_provider_and_validation_failures_without_traceback(
     assert message in result.stderr
     assert "Traceback" not in result.stderr
     assert "test-key" not in result.stderr
+
+
+class TestGraphParser:
+    def test_build_parser(self) -> None:
+        from personal_knowledge_agent.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["graph", "build", "/tmp/test.md"])
+        assert args.command == "graph"
+        assert args.graph_command == "build"
+        assert str(args.source) == "/tmp/test.md"
+
+    def test_search_parser(self) -> None:
+        from personal_knowledge_agent.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["graph", "search", "RAG"])
+        assert args.command == "graph"
+        assert args.graph_command == "search"
+        assert args.query == "RAG"
+
+    def test_show_parser(self) -> None:
+        from personal_knowledge_agent.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["graph", "show", "ent_abc123"])
+        assert args.command == "graph"
+        assert args.graph_command == "show"
+        assert args.entity_id == "ent_abc123"

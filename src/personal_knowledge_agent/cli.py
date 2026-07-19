@@ -79,6 +79,13 @@ from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
 
 _DEFAULT_DATABASE = Path(".pka/knowledge.db")
 _DEFAULT_MEMORY_DATABASE = Path(".pka/memory.db")
+from personal_knowledge_agent.application.graph_build import GraphBuildService
+from personal_knowledge_agent.application.graph_query import GraphQueryService
+from personal_knowledge_agent.domain.errors import GraphFeatureError, GraphSourceNotFoundError, InvalidGraphError, GraphEmptyError, GraphEntityNotFoundError
+from personal_knowledge_agent.infrastructure.llm_knowledge_graph_extractor import LLMKnowledgeGraphExtractor
+from personal_knowledge_agent.infrastructure.sqlite_graph_source_reader import SQLiteGraphSourceReader
+from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import SQLiteKnowledgeGraphStore
+_DEFAULT_GRAPH_DATABASE = Path(".pka/graph.db")
 _SNIPPET_LENGTH = 160
 _SILENT_MEMORY_SKIP_REASONS = {
     MemoryExtractionSkipReason.PREFILTER_MISS,
@@ -725,6 +732,50 @@ def _agent(
         _print_memory_extraction_skip(MemoryExtractionSkipReason.STORAGE_ERROR)
 
 
+def _graph_build(source: Path, database: Path, graph_database: Path) -> None:
+    import os
+    from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
+    from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import OpenAICompatibleChatModel
+    settings = load_llm_settings(os.environ)
+    language_model = OpenAICompatibleChatModel(api_key=settings.api_key, base_url=settings.base_url, model_id=settings.model_id)
+    source_reader = SQLiteGraphSourceReader(database)
+    store = SQLiteKnowledgeGraphStore(graph_database)
+    service = GraphBuildService(source_reader, LLMKnowledgeGraphExtractor(language_model), store)
+    result = service.build(source)
+    print(f"Built graph for {result.source}")
+    print(f"Chunks processed: {result.chunks}")
+    print(f"Entities contributed: {result.entities}")
+    print(f"Relations contributed: {result.relations}")
+    print(f"Evidence records: {result.evidence}")
+
+
+def _graph_search(query: str, limit: int, graph_database: Path) -> None:
+    service = GraphQueryService(SQLiteKnowledgeGraphStore(graph_database))
+    results = service.search(query, limit=limit)
+    if not results:
+        print("No graph entities found.")
+        return
+    for result in results:
+        print(f"[{result.entity_id}] {result.entity_type.value} {result.display_name} score={result.score:.4f}")
+
+
+def _graph_show(entity_id: str, graph_database: Path) -> None:
+    service = GraphQueryService(SQLiteKnowledgeGraphStore(graph_database))
+    neighborhood = service.show(entity_id)
+    print(f"Entity: {neighborhood.entity.display_name}")
+    print(f"  Type: {neighborhood.entity.entity_type.value}")
+    print(f"  ID: {neighborhood.entity.entity_id}")
+    if neighborhood.outgoing:
+        print("Outgoing:")
+        for n in neighborhood.outgoing:
+            print(f"  {n.relation_type.value} -> {n.display_name} [{n.entity_type.value}]")
+    if neighborhood.incoming:
+        print("Incoming:")
+        for n in neighborhood.incoming:
+            print(f"  {n.relation_type.value} <- {n.display_name} [{n.entity_type.value}]")
+
+
+
 def main(arguments: Sequence[str] | None = None) -> None:
     """Run the CLI and print the result of the requested command."""
     parser = build_parser()
@@ -747,6 +798,13 @@ def main(arguments: Sequence[str] | None = None) -> None:
                 parsed.db,
                 parsed.memory_db,
             )
+        elif parsed.command == "graph":
+            if parsed.graph_command == "build":
+                _graph_build(parsed.source, parsed.db, parsed.graph_db)
+            elif parsed.graph_command == "search":
+                _graph_search(parsed.query, parsed.limit, parsed.graph_db)
+            elif parsed.graph_command == "show":
+                _graph_show(parsed.entity_id, parsed.graph_db)
         elif parsed.command == "memory":
             memory_type = (
                 MemoryType(parsed.memory_type)
