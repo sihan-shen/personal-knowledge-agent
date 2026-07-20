@@ -25,8 +25,7 @@
 |---|---|
 | src/personal_knowledge_agent/domain/evaluation.py | Validated evaluation values. |
 | src/personal_knowledge_agent/domain/errors.py | Evaluation-specific KnowledgeError subclasses. |
-| src/personal_knowledge_agent/domain/protocols.py | EvaluationCorpusLoader boundary. |
-| src/personal_knowledge_agent/application/evaluate.py | Controlled ingestion, answering, citation mapping, report assembly. |
+| src/personal_knowledge_agent/application/evaluate.py | Filesystem-aware corpus boundary, controlled ingestion, answering, citation mapping, report assembly. |
 | src/personal_knowledge_agent/infrastructure/evaluation_metrics.py | Pure normalization, EM, F1, citation metrics, macro summary. |
 | src/personal_knowledge_agent/infrastructure/evaluation_report.py | Stable JSON and atomic report writer. |
 | src/personal_knowledge_agent/infrastructure/xquad_suite.py | Packaged-suite loader and validator. |
@@ -46,12 +45,12 @@
 **Files:**
 - Create: src/personal_knowledge_agent/domain/evaluation.py
 - Modify: src/personal_knowledge_agent/domain/errors.py
-- Modify: src/personal_knowledge_agent/domain/protocols.py
+- Create: src/personal_knowledge_agent/application/evaluate.py
 - Test: tests/unit/test_evaluation_models.py
 
 **Interfaces:**
 - Consumes: AnswerStatus, GroundedAnswer, and SearchMode from domain.models.
-- Produces: EvaluationLanguage, EvaluationDocument, EvaluationCase, EvaluationSuite, EvaluationCorpus, CaseMetrics, CaseEvaluation, MetricSummary, EvaluationReport, EvaluationCorpusLoader, EvaluationFeatureError, InvalidEvaluationError, and EvaluationStorageError.
+- Produces: EvaluationLanguage, EvaluationDocument, EvaluationCase, EvaluationSuite, CaseMetrics, CaseEvaluation, MetricSummary, EvaluationReport, EvaluationFeatureError, InvalidEvaluationError, EvaluationStorageError, and the application-layer EvaluationCorpus/EvaluationCorpusLoader boundary.
 
 - [ ] **Step 1: Write failing validation tests**
 
@@ -79,6 +78,11 @@ TMPDIR=/tmp UV_LINK_MODE=copy UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/uni
 Expected: FAIL because domain.evaluation does not exist.
 
 - [ ] **Step 3: Implement values and protocol**
+
+Place `EvaluationLanguage`, `EvaluationCase`, `EvaluationDocument`, and
+`EvaluationSuite` from the following block in `domain/evaluation.py`. Place only
+`EvaluationCorpus` and `EvaluationCorpusLoader` in `application/evaluate.py`;
+they are intentionally not domain values because they contain local paths.
 
 ~~~python
 class EvaluationLanguage(StrEnum):
@@ -121,7 +125,7 @@ class EvaluationCorpusLoader(Protocol):
         ...
 ~~~
 
-EvaluationCorpus validates an exact document-ID-to-existing-Path mapping. CaseMetrics contains four finite floats in [0.0, 1.0]. CaseEvaluation preserves case, answer status, optional model ID, first-seen unique cited document IDs, and CaseMetrics. MetricSummary has a positive count plus four bounded metrics. EvaluationReport preserves ordered cases, mode, limit, overall summary, and exactly EN/ZH summaries.
+Define EvaluationCorpus and EvaluationCorpusLoader in application/evaluate.py, not domain/evaluation.py: the corpus pairs an EvaluationSuite with an exact document-ID-to-existing-Path mapping, so it is an application filesystem boundary. CaseMetrics contains four finite floats in [0.0, 1.0]. CaseEvaluation preserves case, answer status, optional model ID, first-seen unique cited document IDs, and CaseMetrics. MetricSummary has a positive count plus four bounded metrics. EvaluationReport preserves ordered cases, mode, limit, overall summary, and exactly EN/ZH summaries.
 
 Add EvaluationFeatureError(KnowledgeError), InvalidEvaluationError(EvaluationFeatureError), and EvaluationStorageError(EvaluationFeatureError).
 
@@ -132,7 +136,7 @@ Run the Task 1 pytest command. Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ~~~bash
-git add src/personal_knowledge_agent/domain/evaluation.py src/personal_knowledge_agent/domain/errors.py src/personal_knowledge_agent/domain/protocols.py tests/unit/test_evaluation_models.py
+git add src/personal_knowledge_agent/domain/evaluation.py src/personal_knowledge_agent/domain/errors.py src/personal_knowledge_agent/application/evaluate.py tests/unit/test_evaluation_models.py
 git commit -m "feat: define rag evaluation values"
 ~~~
 
@@ -339,7 +343,7 @@ git commit -m "feat: package bilingual rag evaluation suite"
 ### Task 5: Orchestrate private ingestion, answers, and scoring
 
 **Files:**
-- Create: src/personal_knowledge_agent/application/evaluate.py
+- Modify: src/personal_knowledge_agent/application/evaluate.py
 - Test: tests/unit/test_evaluation_service.py
 
 **Interfaces:**
@@ -520,4 +524,3 @@ Plan complete and saved to docs/superpowers/plans/2026-07-20-phase-5a-bilingual-
 2. Inline Execution - Execute tasks in this session using executing-plans, batch execution with checkpoints
 
 Which approach?
-

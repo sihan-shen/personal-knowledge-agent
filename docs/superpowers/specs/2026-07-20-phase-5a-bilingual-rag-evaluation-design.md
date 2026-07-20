@@ -147,13 +147,15 @@ the original user knowledge base remain local.
 - `EvaluationReport`: suite identity, requested search configuration, ordered
   case evaluations, overall summary, and summaries keyed by language.
 
-`infrastructure/xquad_suite.py` owns package-resource access. It returns an
-`EvaluationSuite` and a mapping from each resolved fixture Markdown path to its
-logical document ID. It validates the manifest before any model or index is
+`infrastructure/xquad_suite.py` owns package-resource access. It implements the
+application-layer `EvaluationCorpusLoader` and returns its `EvaluationCorpus`,
+which pairs the pure `EvaluationSuite` with resolved local fixture paths. It
+validates the manifest before any model or index is
 constructed: 24 cases, 12 of each language, unique case IDs, unique document IDs,
 every gold document present, non-empty answer aliases, and complete attribution.
 
-`application/evaluate.py` owns orchestration. It accepts the existing ingestion
+`application/evaluate.py` owns the filesystem-aware `EvaluationCorpus`/
+`EvaluationCorpusLoader` boundary and orchestration. It accepts the existing ingestion
 and grounded-answer boundaries plus a suite loader and metric scorer. It ingests
 the suite documents in declared order, calls `answer(question, limit, mode)` once
 per case in declared order, maps returned citation IDs through `Evidence.source`
