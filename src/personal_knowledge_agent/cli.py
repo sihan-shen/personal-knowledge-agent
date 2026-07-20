@@ -11,6 +11,7 @@ from pathlib import Path
 
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
+from personal_knowledge_agent.application.graph_answer import GraphAnswerService
 from personal_knowledge_agent.application.graph_build import GraphBuildService
 from personal_knowledge_agent.application.graph_query import GraphQueryService
 from personal_knowledge_agent.application.ingest import IngestService
@@ -28,6 +29,7 @@ from personal_knowledge_agent.domain.errors import (
     MemoryStorageError,
 )
 from personal_knowledge_agent.domain.graph import GraphNeighbor
+from personal_knowledge_agent.domain.graph_answer import GraphGroundedAnswer
 from personal_knowledge_agent.domain.memory import (
     MAX_MEMORY_EXTRACTION_INPUT_LENGTH,
     MemoryActivationAction,
@@ -145,6 +147,16 @@ def _answer_limit(value: str) -> int:
     return limit
 
 
+def _graph_answer_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("limit must be an integer") from error
+    if not 1 <= limit <= 5:
+        raise argparse.ArgumentTypeError("limit must be between 1 and 5")
+    return limit
+
+
 def _add_memory_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--memory-db",
@@ -230,6 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
     graph_search_parser.add_argument("query")
     graph_search_parser.add_argument("--limit", type=_search_limit, default=10)
     graph_search_parser.add_argument(
+        "--graph-db", type=Path, default=_DEFAULT_GRAPH_DATABASE
+    )
+
+    graph_ask_parser = graph_subparsers.add_parser(
+        "ask",
+        help="Answer a question using knowledge-graph relationship evidence.",
+    )
+    graph_ask_parser.add_argument("query")
+    graph_ask_parser.add_argument("--limit", type=_graph_answer_limit, default=3)
+    graph_ask_parser.add_argument(
         "--graph-db", type=Path, default=_DEFAULT_GRAPH_DATABASE
     )
 
@@ -806,6 +828,46 @@ def _graph_search(query: str, limit: int, graph_database: Path) -> None:
         )
 
 
+def _print_graph_answer(answer: GraphGroundedAnswer) -> None:
+    if answer.status is AnswerStatus.INSUFFICIENT_EVIDENCE:
+        print("Insufficient graph evidence:")
+        print(answer.answer)
+        return
+
+    print("Answer:")
+    print(answer.answer)
+    print("\nGraph evidence:")
+    for item in answer.evidence:
+        print(
+            f"[{item.citation_id}] {item.source_entity_type.value} "
+            f"{item.source_entity_name} --{item.relation_type.value}--> "
+            f"{item.target_entity_type.value} {item.target_entity_name}"
+        )
+        location = item.provenance.source
+        if item.provenance.heading_path:
+            location = f"{location} > {' > '.join(item.provenance.heading_path)}"
+        print(f"  {location}")
+        print(f"  {item.provenance.evidence_quote}")
+
+
+def _graph_ask(query: str, limit: int, graph_database: Path) -> None:
+    store = SQLiteKnowledgeGraphStore(graph_database, create_if_missing=False)
+
+    def create_language_model() -> OpenAICompatibleChatModel:
+        settings = load_llm_settings(os.environ)
+        return OpenAICompatibleChatModel(
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            model_id=settings.model_id,
+        )
+
+    answer = GraphAnswerService(store, create_language_model).answer(
+        query,
+        limit=limit,
+    )
+    _print_graph_answer(answer)
+
+
 def _print_graph_neighbors(
     heading: str,
     neighbors: Sequence[GraphNeighbor],
@@ -878,6 +940,8 @@ def main(arguments: Sequence[str] | None = None) -> None:
                 _graph_build(parsed.source, parsed.db, parsed.graph_db)
             elif parsed.graph_command == "search":
                 _graph_search(parsed.query, parsed.limit, parsed.graph_db)
+            elif parsed.graph_command == "ask":
+                _graph_ask(parsed.query, parsed.limit, parsed.graph_db)
             elif parsed.graph_command == "show":
                 _graph_show(parsed.entity_id, parsed.graph_db)
         elif parsed.command == "memory":

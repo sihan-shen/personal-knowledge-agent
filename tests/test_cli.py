@@ -72,6 +72,8 @@ def run_cli(
     language_model: LanguageModel | None = None,
     embedder: FakeEmbedder | None = None,
     environment: dict[str, str] | None = None,
+    forbid_model_construction: bool = False,
+    forbid_embedder_construction: bool = False,
 ) -> CliResult:
     """Run the CLI with deterministic embeddings and capture its process contract."""
     stdout = StringIO()
@@ -98,10 +100,20 @@ def run_cli(
         patch(
             "personal_knowledge_agent.cli.E5Embedder",
             return_value=selected_embedder,
+            side_effect=(
+                AssertionError("embedder construction must not run")
+                if forbid_embedder_construction
+                else None
+            ),
         ),
         patch(
             "personal_knowledge_agent.cli.OpenAICompatibleChatModel",
             return_value=model,
+            side_effect=(
+                AssertionError("model construction must not run")
+                if forbid_model_construction
+                else None
+            ),
         ),
         patch.dict(os.environ, settings, clear=True),
         redirect_stdout(stdout),
@@ -112,6 +124,63 @@ def run_cli(
         except SystemExit as error:
             returncode = int(error.code or 0)
     return CliResult(returncode, stdout.getvalue(), stderr.getvalue())
+
+
+def seed_graph_answer_data(graph_database: Path, source: Path) -> None:
+    """Seed one real relation with two deterministic provenance records."""
+    source = source.resolve()
+    first = Chunk(
+        "graph-answer-chunk-1",
+        "graph-answer-document",
+        0,
+        "first supporting quote",
+        ("RAG", "Retrieval"),
+    )
+    second = Chunk(
+        "graph-answer-chunk-2",
+        "graph-answer-document",
+        1,
+        "second supporting quote",
+        ("RAG", "Retrieval"),
+    )
+    rag = GraphEntity(
+        make_entity_id(EntityType.METHOD, "RAG"),
+        EntityType.METHOD,
+        "RAG",
+    )
+    vectors = GraphEntity(
+        make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval"),
+        EntityType.TECHNOLOGY,
+        "Vector Retrieval",
+    )
+    relation = GraphRelation(
+        make_relation_id(RelationType.USES, rag.entity_id, vectors.entity_id),
+        RelationType.USES,
+        rag.entity_id,
+        vectors.entity_id,
+    )
+    source_document = GraphSourceDocument(
+        "graph-answer-document",
+        source,
+        "a" * 64,
+        (first, second),
+    )
+    extractions = (
+        GraphChunkExtraction(
+            first,
+            (rag, vectors),
+            (GraphRelationEvidence(relation, first.text),),
+        ),
+        GraphChunkExtraction(
+            second,
+            (rag, vectors),
+            (GraphRelationEvidence(relation, second.text),),
+        ),
+    )
+    SQLiteKnowledgeGraphStore(graph_database).replace_document(
+        source_document,
+        extractions,
+    )
 
 
 def seed_pending_memory(
@@ -2693,6 +2762,209 @@ class TestGraphParser:
         assert args.command == "graph"
         assert args.graph_command == "show"
         assert args.entity_id == "ent_abc123"
+
+
+def test_graph_ask_parser_uses_safe_defaults() -> None:
+    parsed = build_parser().parse_args(["graph", "ask", "question"])
+
+    assert parsed.graph_command == "ask"
+    assert parsed.query == "question"
+    assert parsed.limit == 3
+    assert parsed.graph_db == Path(".pka/graph.db")
+
+
+@pytest.mark.parametrize("limit", ["0", "6"])
+def test_graph_ask_rejects_limit_outside_seed_boundary(limit: str) -> None:
+    result = run_cli("graph", "ask", "question", "--limit", limit)
+
+    assert result.returncode == 2
+    assert "between 1 and 5" in result.stderr
+
+
+@pytest.mark.parametrize("unsupported_option", ["--db", "--mode", "--memory-db"])
+def test_graph_ask_rejects_unrelated_composition_options(
+    unsupported_option: str,
+) -> None:
+    result = run_cli("graph", "ask", "question", unsupported_option, "value")
+
+    assert result.returncode == 2
+    assert "unrecognized arguments" in result.stderr
+
+
+def test_graph_ask_no_match_refuses_without_remote_or_embedding_setup(
+    tmp_path: Path,
+) -> None:
+    graph_database = tmp_path / "graph.db"
+    seed_graph_answer_data(graph_database, tmp_path / "rag.md")
+
+    result = run_cli(
+        "graph",
+        "ask",
+        "gardening",
+        "--graph-db",
+        str(graph_database),
+        environment={},
+        forbid_model_construction=True,
+        forbid_embedder_construction=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Insufficient graph evidence:\n"
+        "The knowledge graph does not contain enough relationship evidence.\n"
+    )
+    assert result.stderr == ""
+
+
+def test_graph_ask_prints_only_cited_real_graph_evidence_and_minimizes_prompt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "rag.md"
+    graph_database = tmp_path / "graph.db"
+    seed_graph_answer_data(graph_database, source)
+    model = FakeLanguageModel(
+        ModelOutput(
+            "fake-model",
+            '{"status":"answered","answer":"RAG uses vector retrieval. [G2]",'
+            '"citation_ids":["G2"]}',
+            "stop",
+        )
+    )
+
+    result = run_cli(
+        "graph",
+        "ask",
+        "How does RAG use vector retrieval?",
+        "--graph-db",
+        str(graph_database),
+        language_model=model,
+        forbid_embedder_construction=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        "Answer:\n"
+        "RAG uses vector retrieval. [G2]\n"
+        "\n"
+        "Graph evidence:\n"
+        "[G2] method RAG --uses--> technology Vector Retrieval\n"
+        f"  {source.resolve()} > RAG > Retrieval\n"
+        "  second supporting quote\n"
+    )
+    assert "[G1]" not in result.stdout
+    assert "first supporting quote" not in result.stdout
+    assert len(model.calls) == 1
+    prompt = "\n".join(message.content for message in model.calls[0])
+    rag_id = make_entity_id(EntityType.METHOD, "RAG")
+    vectors_id = make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval")
+    assert str(source.resolve()) not in prompt
+    assert str(graph_database.resolve()) not in prompt
+    assert "graph-answer-chunk-1" not in prompt
+    assert "graph-answer-chunk-2" not in prompt
+    assert rag_id not in prompt
+    assert vectors_id not in prompt
+    assert "score" not in prompt.lower()
+    assert "test-key" not in prompt
+
+
+def test_graph_ask_model_refusal_omits_graph_evidence_section(tmp_path: Path) -> None:
+    graph_database = tmp_path / "graph.db"
+    seed_graph_answer_data(graph_database, tmp_path / "rag.md")
+    model = FakeLanguageModel(
+        ModelOutput(
+            "fake-model",
+            '{"status":"insufficient_evidence",'
+            '"answer":"The relationship is not established.",'
+            '"citation_ids":[]}',
+            "stop",
+        )
+    )
+
+    result = run_cli(
+        "graph",
+        "ask",
+        "How does RAG use vector retrieval?",
+        "--graph-db",
+        str(graph_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "Insufficient graph evidence:\nThe relationship is not established.\n"
+    )
+    assert "Graph evidence:" not in result.stdout
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("database_state", ["missing", "empty"])
+def test_graph_ask_reports_unavailable_graph_without_traceback(
+    tmp_path: Path,
+    database_state: str,
+) -> None:
+    graph_database = tmp_path / "graph.db"
+    if database_state == "empty":
+        SQLiteKnowledgeGraphStore(graph_database)
+
+    result = run_cli(
+        "graph",
+        "ask",
+        "RAG",
+        "--graph-db",
+        str(graph_database),
+        environment={},
+        forbid_model_construction=True,
+        forbid_embedder_construction=True,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr.startswith("error: ")
+    assert "empty" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert not result.stdout
+    assert graph_database.exists() is (database_state == "empty")
+
+
+@pytest.mark.parametrize(
+    ("model_result", "message"),
+    [
+        (LanguageModelError("graph provider failed"), "graph provider failed"),
+        (ModelOutput("fake-model", "not JSON", "stop"), "valid JSON"),
+        (
+            ModelOutput(
+                "fake-model",
+                '{"status":"answered","answer":"Unsupported [G99]",'
+                '"citation_ids":["G99"]}',
+                "stop",
+            ),
+            "unknown citation",
+        ),
+    ],
+)
+def test_graph_ask_reports_generation_failures_without_traceback(
+    tmp_path: Path,
+    model_result: ModelOutput | Exception,
+    message: str,
+) -> None:
+    graph_database = tmp_path / "graph.db"
+    seed_graph_answer_data(graph_database, tmp_path / "rag.md")
+
+    result = run_cli(
+        "graph",
+        "ask",
+        "How does RAG use vector retrieval?",
+        "--graph-db",
+        str(graph_database),
+        language_model=FakeLanguageModel(model_result),
+    )
+
+    assert result.returncode == 1
+    assert result.stderr.startswith("error: ")
+    assert message in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "test-key" not in result.stderr
+    assert result.stdout == ""
 
 
 def test_graph_show_prints_relation_direction_and_complete_provenance(
