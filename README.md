@@ -150,6 +150,37 @@ the API key, and the embedding vectors remain local. Retrieved text can still be
 private, so configure only a provider you trust and understand its data policy before
 using `ask`.
 
+## Evaluate document RAG
+
+Run the packaged bilingual evaluation suite with the same answer-provider
+configuration required by `pka ask` (including `PKA_LLM_API_KEY`):
+
+```bash
+uv run pka evaluate \
+  --mode hybrid \
+  --limit 5 \
+  --output .pka/reports/xquad-mini-v1.json
+```
+
+The command rebuilds its fixture index at
+`.pka/evaluations/xquad-mini-v1/knowledge.db` and writes the requested JSON report
+to `.pka/reports/xquad-mini-v1.json`. It deliberately has no `--db` option: it never
+reads or modifies the private `.pka/knowledge.db` knowledge base. The packaged
+24-case English/Chinese `xquad-mini v1` fixture is a CC BY-SA 4.0 derivative of
+[XQuAD](src/personal_knowledge_agent/evaluation_suites/xquad_mini/ATTRIBUTION.md);
+the attribution records the pinned upstream revision and integrity checks.
+
+The CLI prints macro averages for four metrics: answer exact match, answer token F1,
+citation precision, and citation recall. It also prints English and Chinese token F1
+to make a language imbalance visible. Exact match and extractive token F1 compare a
+generated answer with reference answer strings after deterministic normalization.
+They are useful regression signals, but do not measure semantic equivalence,
+helpfulness, completeness, style, or whether an otherwise correct paraphrase was
+preferred. Citation precision and recall measure whether the answer cited the case's
+gold fixture document; they do not establish that a citation fully supports every
+claim. Live generation can vary by model/provider even though the local fixture,
+ingestion, scoring, and report formatting are deterministic.
+
 ## Let the Agent choose whether to retrieve
 
 Use `agent` when you want the routing decision to be part of the workflow:

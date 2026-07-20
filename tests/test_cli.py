@@ -1353,7 +1353,7 @@ def test_evaluate_creates_default_report_parent_in_a_clean_project(
     assert f"Report: {Path('.pka/reports/xquad-mini-v1.json')}" in result.stdout
 
 
-def test_evaluate_uses_a_private_database_and_writes_report(tmp_path: Path) -> None:
+def test_evaluation_summary_matches_the_documented_contract(tmp_path: Path) -> None:
     output = tmp_path / "report.json"
 
     result = run_cli(
@@ -1365,10 +1365,13 @@ def test_evaluate_uses_a_private_database_and_writes_report(tmp_path: Path) -> N
 
     assert result.returncode == 0
     assert "Suite: xquad-mini v1 (24 cases)" in result.stdout
+    assert "Answer exact match:" in result.stdout
     assert "Answer token F1:" in result.stdout
+    assert "Citation precision:" in result.stdout
+    assert "Citation recall:" in result.stdout
     assert "English token F1:" in result.stdout
     assert "Chinese token F1:" in result.stdout
-    assert str(output) in result.stdout
+    assert f"Report: {output}" in result.stdout
     assert output.is_file()
 
 

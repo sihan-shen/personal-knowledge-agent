@@ -84,4 +84,8 @@ gate before a feature is merged.
   local BM25 entity search, one-hop neighborhood inspection, and `pka graph build|search|show`.
 - Phase 4B is complete: explicit graph-only answering, whole-question BM25 seeds,
   one-hop provenance evidence, strict `[G#]` citations, and local failure-closed refusal.
-- PDF/web/code ingestion, evaluation, and deployment remain future work.
+- Phase 5A is complete after the documented full quality gate: a reproducible,
+  isolated bilingual XQuAD-mini document-RAG evaluation with deterministic local
+  scoring and stable reports.
+- Broader evaluation (including Agent, memory, graph, PDF/web/code ingestion, and
+  deployment evaluation) remains future work.
