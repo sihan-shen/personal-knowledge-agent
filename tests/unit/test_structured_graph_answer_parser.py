@@ -139,10 +139,18 @@ def test_rejects_invalid_answer_schema(payload: object, message: str) -> None:
         ("Body only. [G1] [G2]", ["G1"], "match"),
         ("Declared only. [G1]", ["G1", "G2"], "match"),
         ("Wrong order. [G1] [G2]", ["G2", "G1"], "first-use"),
-        ("Document evidence. [S1]", ["G1"], "only G"),
-        ("Memory evidence. [M1]", ["G1"], "only G"),
-        ("Declared document evidence. [S1]", ["S1"], "only G"),
-        ("Declared memory evidence. [M1]", ["M1"], "only G"),
+        ("Document evidence. [S1]", ["G1"], "only valid G evidence"),
+        ("Memory evidence. [M1]", ["G1"], "only valid G evidence"),
+        (
+            "Declared document evidence. [S1]",
+            ["S1"],
+            "only valid G evidence",
+        ),
+        (
+            "Declared memory evidence. [M1]",
+            ["M1"],
+            "only valid G evidence",
+        ),
     ],
 )
 def test_rejects_invalid_answered_citations(
@@ -163,20 +171,70 @@ def test_rejects_invalid_answered_citations(
         )
 
 
+@pytest.mark.parametrize("malformed_marker", ["[Gx]", "[G1 ]", "[G[1]]"])
+def test_answered_output_rejects_malformed_graph_family_body_marker(
+    malformed_marker: str,
+) -> None:
+    with pytest.raises(InvalidCitationError, match="only valid G evidence"):
+        parse_graph_grounded_answer(
+            output(
+                {
+                    "status": "answered",
+                    "answer": f"Supported. [G1] Also malformed. {malformed_marker}",
+                    "citation_ids": ["G1"],
+                }
+            ),
+            (evidence("G1"),),
+        )
+
+
+@pytest.mark.parametrize("malformed_marker", ["[Gx]", "[G1 ]", "[G[1]]"])
+def test_insufficient_output_rejects_malformed_graph_family_body_marker(
+    malformed_marker: str,
+) -> None:
+    with pytest.raises(InvalidCitationError, match="only valid G evidence"):
+        parse_graph_grounded_answer(
+            output(
+                {
+                    "status": "insufficient_evidence",
+                    "answer": f"Cannot answer. {malformed_marker}",
+                    "citation_ids": [],
+                }
+            ),
+            (evidence("G1"),),
+        )
+
+
+def test_answered_output_ignores_non_citation_bracketed_prose() -> None:
+    answer = parse_graph_grounded_answer(
+        output(
+            {
+                "status": "answered",
+                "answer": "Supported. [G1] [additional context]",
+                "citation_ids": ["G1"],
+            }
+        ),
+        (evidence("G1"),),
+    )
+
+    assert answer.citation_ids == ("G1",)
+
+
 @pytest.mark.parametrize(
-    ("answer_text", "citation_ids"),
+    ("answer_text", "citation_ids", "message"),
     [
-        ("Cannot answer. [G1]", []),
-        ("Cannot answer. [S1]", []),
-        ("Cannot answer. [M1]", []),
-        ("Cannot answer.", ["G1"]),
+        ("Cannot answer. [G1]", [], "must not cite"),
+        ("Cannot answer. [S1]", [], "only valid G evidence"),
+        ("Cannot answer. [M1]", [], "only valid G evidence"),
+        ("Cannot answer.", ["G1"], "must not cite"),
     ],
 )
 def test_insufficient_evidence_rejects_declared_or_body_citations(
     answer_text: str,
     citation_ids: list[str],
+    message: str,
 ) -> None:
-    with pytest.raises(InvalidCitationError, match="must not cite"):
+    with pytest.raises(InvalidCitationError, match=message):
         parse_graph_grounded_answer(
             output(
                 {

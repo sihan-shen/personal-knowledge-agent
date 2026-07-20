@@ -176,6 +176,39 @@ def test_orders_neighbors_by_relation_display_name_and_entity_id() -> None:
     ]
 
 
+def test_orders_non_ascii_neighbor_names_by_unicode_code_point() -> None:
+    rag = entity(EntityType.METHOD, "RAG")
+    neighborhood = EntityNeighborhood(
+        rag,
+        (
+            neighbor(
+                entity(EntityType.CONCEPT, "中文"),
+                RelationType.USES,
+                provenance("chinese", 0),
+            ),
+            neighbor(
+                entity(EntityType.CONCEPT, "Éclair"),
+                RelationType.USES,
+                provenance("eclair", 1),
+            ),
+            neighbor(
+                entity(EntityType.CONCEPT, "Ångström"),
+                RelationType.USES,
+                provenance("angstrom", 2),
+            ),
+        ),
+        (),
+    )
+
+    evidence = build_graph_evidence((neighborhood,))
+
+    assert [item.provenance.evidence_quote for item in evidence] == [
+        "angstrom",
+        "eclair",
+        "chinese",
+    ]
+
+
 def test_orders_provenance_by_source_position_chunk_and_quote() -> None:
     evidence = build_graph_evidence(
         one_relation_neighborhood(
@@ -262,6 +295,29 @@ def test_keeps_canonical_related_to_direction_from_neighborhood() -> None:
     )
 
     evidence = build_graph_evidence((outgoing, incoming))
+
+    assert len(evidence) == 1
+    assert evidence[0].source_entity_name == source.display_name
+    assert evidence[0].target_entity_name == target.display_name
+
+
+def test_related_to_keeps_direction_with_higher_ranked_incoming_seed() -> None:
+    alpha = entity(EntityType.CONCEPT, "Alpha")
+    beta = entity(EntityType.CONCEPT, "Beta")
+    source, target = sorted((alpha, beta), key=lambda item: item.entity_id)
+    shared = provenance("canonical", 0)
+    higher_ranked_incoming = EntityNeighborhood(
+        target,
+        (),
+        (neighbor(source, RelationType.RELATED_TO, shared),),
+    )
+    lower_ranked_outgoing = EntityNeighborhood(
+        source,
+        (neighbor(target, RelationType.RELATED_TO, shared),),
+        (),
+    )
+
+    evidence = build_graph_evidence((higher_ranked_incoming, lower_ranked_outgoing))
 
     assert len(evidence) == 1
     assert evidence[0].source_entity_name == source.display_name

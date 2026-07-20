@@ -17,8 +17,9 @@ from personal_knowledge_agent.domain.graph_answer import (
 from personal_knowledge_agent.domain.models import AnswerStatus, ModelOutput
 
 _REQUIRED_FIELDS = {"status", "answer", "citation_ids"}
-_GRAPH_CITATION_PATTERN = re.compile(r"\[(G\d+)\]")
-_KNOWN_FAMILY_PATTERN = re.compile(r"\[((?:G|S|M)\d+)\]")
+_CITATION_LIKE_PATTERN = re.compile(r"\[((?:G|S|M)[^\]]*)\]")
+_VALID_GRAPH_CITATION_PATTERN = re.compile(r"G\d+")
+_INVALID_GRAPH_CITATION_MESSAGE = "Graph answers may cite only valid G evidence"
 
 
 def parse_graph_grounded_answer(
@@ -54,10 +55,14 @@ def parse_graph_grounded_answer(
         ) from error
 
     citation_ids = tuple(citation_values)
-    body_graph_citations = _ordered_unique(_GRAPH_CITATION_PATTERN.findall(answer))
-    body_family_citations = _ordered_unique(_KNOWN_FAMILY_PATTERN.findall(answer))
+    body_labels = _CITATION_LIKE_PATTERN.findall(answer)
+    if any(
+        _VALID_GRAPH_CITATION_PATTERN.fullmatch(item) is None for item in body_labels
+    ):
+        raise InvalidCitationError(_INVALID_GRAPH_CITATION_MESSAGE)
+    body_graph_citations = _ordered_unique(body_labels)
     if status is AnswerStatus.INSUFFICIENT_EVIDENCE:
-        if citation_ids or body_family_citations:
+        if citation_ids or body_graph_citations:
             raise InvalidCitationError(
                 "An insufficient-evidence graph response must not cite evidence"
             )
@@ -66,7 +71,6 @@ def parse_graph_grounded_answer(
     selected_evidence = _validate_answered_citations(
         citation_ids,
         body_graph_citations,
-        body_family_citations,
         evidence,
     )
     return GraphGroundedAnswer(
@@ -110,17 +114,16 @@ def _ordered_unique(values: Sequence[str]) -> tuple[str, ...]:
 def _validate_answered_citations(
     citation_ids: tuple[str, ...],
     body_graph_citations: tuple[str, ...],
-    body_family_citations: tuple[str, ...],
     evidence: Sequence[GraphEvidence],
 ) -> tuple[GraphEvidence, ...]:
     if not citation_ids:
         raise InvalidCitationError("An answered graph response needs a citation")
     if len(set(citation_ids)) != len(citation_ids):
         raise InvalidCitationError("citation_ids must be unique")
-    if any(re.fullmatch(r"G\d+", item) is None for item in citation_ids):
-        raise InvalidCitationError("Graph answers may cite only G evidence")
-    if any(not item.startswith("G") for item in body_family_citations):
-        raise InvalidCitationError("Graph answers may cite only G evidence")
+    if any(
+        _VALID_GRAPH_CITATION_PATTERN.fullmatch(item) is None for item in citation_ids
+    ):
+        raise InvalidCitationError(_INVALID_GRAPH_CITATION_MESSAGE)
     if body_graph_citations != citation_ids:
         raise InvalidCitationError(
             "Answer body citations must match citation_ids in first-use order"
