@@ -82,4 +82,6 @@ gate before a feature is merged.
   validation, deterministic identity via `(type, NFKC-normalized name)`, cross-document
   shared entities, provenance-aware SQLite persistence, per-source atomic replacement,
   local BM25 entity search, one-hop neighborhood inspection, and `pka graph build|search|show`.
+- Phase 4B is complete: explicit graph-only answering, whole-question BM25 seeds,
+  one-hop provenance evidence, strict `[G#]` citations, and local failure-closed refusal.
 - PDF/web/code ingestion, evaluation, and deployment remain future work.

@@ -4,7 +4,7 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 4A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+Phase 4B provides persistent Markdown ingestion, Chinese/English lexical, semantic,
 and hybrid retrieval, evidence-grounded answers through an OpenAI-compatible Chat
 Completions endpoint, a conservative Agent router, and confirmation-gated long-term
 memory with conservative request-local recall. Embeddings run locally on CPU and
@@ -13,9 +13,12 @@ document-only RAG pipeline; `pka agent` visibly chooses a safe local direct resp
 or a retrieval path that may combine document evidence with confirmed active
 memories, then may propose a new memory after a successful response.
 
-Phase 4A also provides a separate, inspectable knowledge graph. It is built only
-on request from chunks already stored in the Markdown knowledge index. The graph
-does not influence `ask`, `agent`, routing, or long-term memory.
+Phase 4B also provides a separate, inspectable knowledge graph and an explicit
+graph-grounded answer command. The graph is built only on request from chunks already
+stored in the Markdown knowledge index. `pka graph ask` is graph-only: it does not
+open `.pka/knowledge.db` or use normal document RAG, the Agent, long-term memory, E5
+embeddings, LLM query planning, or a fallback to another answer path. The existing
+`ask`, `agent`, routing, and long-term-memory workflows remain separate.
 
 ## Prerequisites
 
@@ -304,6 +307,40 @@ prints one hop of incoming and outgoing relations and every evidence quote with 
 source and heading. A missing or empty graph is reported safely and is not created by
 a query command.
 
+### Ask from graph relationship evidence
+
+Use the explicit graph-only command when you want an answer grounded in graph
+relations rather than document chunks:
+
+```bash
+uv run pka graph ask "RAG 使用什么技术？"
+uv run pka graph ask "RAG 使用什么技术？" --limit 3
+uv run pka graph ask "RAG 使用什么技术？" --graph-db data/graph.db
+```
+
+The whole question is used as a local mixed Chinese/English BM25 entity search. It
+selects between 1 and 5 entity seeds (default 3), expands only each seed's one-hop
+incoming and outgoing relationships, and sends at most 12 deduplicated
+relation-plus-provenance evidence records to the provider. Each usable fact has a
+`[G#]` citation, and the `Graph evidence` section renders exactly the cited directed
+relation plus its local source, heading, and exact provenance quote. This makes an
+incoming relation visible in its original direction rather than reversing its claim.
+
+If no seed yields relationship evidence, `pka graph ask` refuses locally with zero
+model calls; it does not require API configuration in that case. The language model
+is constructed lazily only after local evidence exists. When there is evidence, the
+configured provider receives the question and only each record's request-local
+citation ID, source/target entity types and names, relation type, heading path, and
+evidence quote. Local source paths, entity and relation IDs, chunk IDs and positions,
+graph-database path, search scores, credentials, and other storage metadata are not
+sent. Evidence quotes can still be private, so use a provider whose data policy you
+trust.
+
+Graph answers use strict structured output validation: an answered response must use
+only supplied `[G#]` citations, and an insufficient-evidence response cannot cite
+anything. This command has no document-RAG, knowledge-database, Agent, memory, or
+alternate-answer fallback.
+
 The default graph database is `.pka/graph.db`, separate from `.pka/knowledge.db` and
 `.pka/memory.db`. Reingesting a document does not rebuild its graph automatically:
 the graph remains its last successful snapshot until you explicitly run `graph build`
@@ -311,9 +348,9 @@ again. SQLite storage is local and unencrypted. Replacement deletes application 
 but cannot guarantee secure erasure from SQLite pages, filesystem snapshots, caches,
 or provider systems.
 
-Phase 4A intentionally excludes GraphRAG, graph context in answers, natural-language
-graph queries, multi-hop traversal, aliases or fuzzy entity merging, graph editing,
-PDF/web/code ingestion, visualization, and external graph services.
+Phase 4B intentionally excludes hybrid document-and-graph context, Agent routing to
+the graph, LLM query planning, multi-hop traversal, aliases or fuzzy entity merging,
+graph editing, PDF/web/code ingestion, visualization, and external graph services.
 
 ## Manage confirmation-gated long-term memory
 
