@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter
@@ -43,6 +44,12 @@ _ENGLISH_SHA256: Final[str] = (
 )
 _CHINESE_SHA256: Final[str] = (
     "691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835"
+)
+_CORPUS_SHA256: Final[str] = (
+    "4cfa30a46d8c3a065f298fda2d41018df2902dfccba1c78532d6b628f3a34d43"
+)
+_LICENSE_SHA256: Final[str] = (
+    "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
 )
 
 
@@ -87,9 +94,10 @@ def _require_exact_keys(
         raise _invalid(f"{owner} must contain exactly {sorted(expected)!r}")
 
 
-def _read_manifest(path: Path) -> Mapping[str, object]:
+def _read_manifest(path: Path) -> tuple[Mapping[str, object], bytes]:
     try:
-        serialized = path.read_text(encoding="utf-8")
+        serialized_bytes = path.read_bytes()
+        serialized = serialized_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise _invalid("cases.json cannot be read") from exc
     try:
@@ -98,7 +106,7 @@ def _read_manifest(path: Path) -> Mapping[str, object]:
         )
     except json.JSONDecodeError as exc:
         raise _invalid("cases.json is not valid JSON") from exc
-    return _mapping(value, "root")
+    return _mapping(value, "root"), serialized_bytes
 
 
 def _read_attribution(suite_directory: Path, manifest_attribution: str) -> None:
@@ -114,7 +122,8 @@ def _read_attribution(suite_directory: Path, manifest_attribution: str) -> None:
 
     try:
         attribution = (suite_directory / "ATTRIBUTION.md").read_text(encoding="utf-8")
-        license_text = (suite_directory / "LICENSE.txt").read_text(encoding="utf-8")
+        license_bytes = (suite_directory / "LICENSE.txt").read_bytes()
+        license_text = license_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise _invalid("attribution or license resource cannot be read") from exc
 
@@ -125,6 +134,7 @@ def _read_attribution(suite_directory: Path, manifest_attribution: str) -> None:
         _REVISION,
         _ENGLISH_SHA256,
         _CHINESE_SHA256,
+        _CORPUS_SHA256,
         "Mikel Artetxe",
         "Sebastian Ruder",
         "Dani Yogatama",
@@ -133,8 +143,46 @@ def _read_attribution(suite_directory: Path, manifest_attribution: str) -> None:
     )
     if any(fragment not in attribution for fragment in attribution_fragments):
         raise _invalid("ATTRIBUTION.md is incomplete")
-    if "Attribution-ShareAlike 4.0 International" not in license_text:
+    if (
+        "Attribution-ShareAlike 4.0 International" not in license_text
+        or hashlib.sha256(license_bytes).hexdigest() != _LICENSE_SHA256
+    ):
         raise _invalid("LICENSE.txt is not CC BY-SA 4.0")
+
+
+def _validate_resource_integrity(
+    suite_directory: Path,
+    manifest_bytes: bytes,
+    documents: tuple[EvaluationDocument, ...],
+    document_paths: Mapping[str, Path],
+) -> None:
+    documents_directory = suite_directory / "documents"
+    try:
+        actual_resources = {
+            path.relative_to(suite_directory).as_posix()
+            for path in documents_directory.rglob("*.md")
+            if path.is_file()
+        }
+    except OSError as exc:
+        raise _invalid("documents directory cannot be read") from exc
+    declared_resources = {document.resource_name for document in documents}
+    if actual_resources != declared_resources:
+        raise _invalid("documents directory must match the manifest exactly")
+
+    digest = hashlib.sha256()
+    digest.update(b"cases.json\0")
+    digest.update(manifest_bytes)
+    digest.update(b"\0")
+    try:
+        for document in documents:
+            digest.update(document.resource_name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(document_paths[document.document_id].read_bytes())
+            digest.update(b"\0")
+    except OSError as exc:
+        raise _invalid("document integrity cannot be verified") from exc
+    if digest.hexdigest() != _CORPUS_SHA256:
+        raise _invalid("packaged corpus integrity check failed")
 
 
 def _document_and_path(
@@ -280,7 +328,7 @@ class XQuadMiniSuiteLoader:
 
     def load(self) -> EvaluationCorpus:
         """Return the complete packaged corpus or reject any malformed resource."""
-        manifest = _read_manifest(self._suite_directory / "cases.json")
+        manifest, manifest_bytes = _read_manifest(self._suite_directory / "cases.json")
         _require_exact_keys(manifest, _MANIFEST_KEYS, "root")
         suite_id = _text(manifest, "suite_id", "root")
         version = _text(manifest, "version", "root")
@@ -297,6 +345,12 @@ class XQuadMiniSuiteLoader:
         documents = tuple(item[0] for item in loaded_documents)
         document_paths = {item[0].document_id: item[1] for item in loaded_documents}
         contexts = {item[0].document_id: item[2] for item in loaded_documents}
+        _validate_resource_integrity(
+            self._suite_directory,
+            manifest_bytes,
+            documents,
+            document_paths,
+        )
 
         case_values = _list(manifest.get("cases"), "cases")
         cases = tuple(_case(value, index) for index, value in enumerate(case_values))

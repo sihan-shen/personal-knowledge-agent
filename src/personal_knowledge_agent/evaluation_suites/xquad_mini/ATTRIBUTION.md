@@ -10,6 +10,7 @@ XQuAD-mini-v1 is a derivative fixture made from the official XQuAD (Cross-lingua
 - English SHA-256: `e4c57d1c9143aaa1c5d265ba5987a65f4e69528d2a98f29d6e75019b10344f29`
 - Chinese source: https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.zh.json
 - Chinese SHA-256: `691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835`
+- Packaged `cases.json` plus 24 documents aggregate SHA-256: `4cfa30a46d8c3a065f298fda2d41018df2902dfccba1c78532d6b628f3a34d43`
 
 The revision and both SHA-256 values are fixed so the derivative can be reproduced from the exact source bytes.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -53,6 +54,14 @@ _EXPECTED_REFERENCE_ANSWERS = (
     ("Kony Ealy",),
     ("科尼·伊利",),
 )
+
+
+def _copy_packaged_suite(tmp_path: Path) -> Path:
+    corpus = XQuadMiniSuiteLoader().load()
+    source = next(iter(corpus.document_paths.values())).parent.parent
+    destination = tmp_path / "xquad_mini"
+    shutil.copytree(source, destination)
+    return destination
 
 
 def test_xquad_mini_loads_a_balanced_bilingual_public_corpus() -> None:
@@ -129,7 +138,11 @@ def test_xquad_mini_has_complete_public_attribution() -> None:
         "691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835"
         in attribution
     )
-    assert len(re.findall(r"\b[0-9a-f]{64}\b", attribution)) == 2
+    assert (
+        "4cfa30a46d8c3a065f298fda2d41018df2902dfccba1c78532d6b628f3a34d43"
+        in attribution
+    )
+    assert len(re.findall(r"\b[0-9a-f]{64}\b", attribution)) == 3
     assert "Attribution-ShareAlike 4.0 International" in license_text
 
 
@@ -168,3 +181,48 @@ def test_xquad_mini_rejects_an_incomplete_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidEvaluationError, match="manifest"):
         XQuadMiniSuiteLoader(tmp_path).load()
+
+
+def test_xquad_mini_rejects_a_changed_question(tmp_path: Path) -> None:
+    suite_directory = _copy_packaged_suite(tmp_path)
+    manifest_path = suite_directory / "cases.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cases"][0]["question"] = "A substituted question?"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(InvalidEvaluationError, match="integrity"):
+        XQuadMiniSuiteLoader(suite_directory).load()
+
+
+def test_xquad_mini_rejects_a_changed_context_that_still_has_the_answer(
+    tmp_path: Path,
+) -> None:
+    suite_directory = _copy_packaged_suite(tmp_path)
+    document_path = next((suite_directory / "documents").glob("*.en.md"))
+    serialized = document_path.read_text(encoding="utf-8")
+    document_path.write_text(serialized[:-1] + " Tampered.\n", encoding="utf-8")
+
+    with pytest.raises(InvalidEvaluationError, match="integrity"):
+        XQuadMiniSuiteLoader(suite_directory).load()
+
+
+def test_xquad_mini_rejects_a_truncated_license(tmp_path: Path) -> None:
+    suite_directory = _copy_packaged_suite(tmp_path)
+    (suite_directory / "LICENSE.txt").write_text(
+        "Attribution-ShareAlike 4.0 International\n", encoding="utf-8"
+    )
+
+    with pytest.raises(InvalidEvaluationError, match="LICENSE"):
+        XQuadMiniSuiteLoader(suite_directory).load()
+
+
+def test_xquad_mini_rejects_an_undeclared_markdown_document(tmp_path: Path) -> None:
+    suite_directory = _copy_packaged_suite(tmp_path)
+    (suite_directory / "documents" / "stale.md").write_text(
+        "# stale\n\nStale context.\n", encoding="utf-8"
+    )
+
+    with pytest.raises(InvalidEvaluationError, match="documents"):
+        XQuadMiniSuiteLoader(suite_directory).load()
