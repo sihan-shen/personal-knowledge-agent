@@ -1,0 +1,321 @@
+{
+  "suite_id": "xquad-mini",
+  "version": "v1",
+  "attribution": "Derived from XQuAD by Artetxe, Ruder, and Yogatama (2019), pinned at revision 7d30520c717524000f0d9d2f9c10a069acd9d285 and licensed CC BY-SA 4.0; see ATTRIBUTION.md and LICENSE.txt.",
+  "documents": [
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:en",
+      "resource_name": "documents/56beb4343aeaaa14008c925b.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:zh",
+      "resource_name": "documents/56beb4343aeaaa14008c925b.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:en",
+      "resource_name": "documents/56beb4343aeaaa14008c925c.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:zh",
+      "resource_name": "documents/56beb4343aeaaa14008c925c.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:en",
+      "resource_name": "documents/56beb4343aeaaa14008c925d.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:zh",
+      "resource_name": "documents/56beb4343aeaaa14008c925d.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:en",
+      "resource_name": "documents/56beb4343aeaaa14008c925e.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:zh",
+      "resource_name": "documents/56beb4343aeaaa14008c925e.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:en",
+      "resource_name": "documents/56beb4343aeaaa14008c925f.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:zh",
+      "resource_name": "documents/56beb4343aeaaa14008c925f.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198290:en",
+      "resource_name": "documents/56d6f3500d65d21400198290.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198290:zh",
+      "resource_name": "documents/56d6f3500d65d21400198290.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198291:en",
+      "resource_name": "documents/56d6f3500d65d21400198291.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198291:zh",
+      "resource_name": "documents/56d6f3500d65d21400198291.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198292:en",
+      "resource_name": "documents/56d6f3500d65d21400198292.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198292:zh",
+      "resource_name": "documents/56d6f3500d65d21400198292.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198293:en",
+      "resource_name": "documents/56d6f3500d65d21400198293.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198293:zh",
+      "resource_name": "documents/56d6f3500d65d21400198293.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198294:en",
+      "resource_name": "documents/56d6f3500d65d21400198294.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d6f3500d65d21400198294:zh",
+      "resource_name": "documents/56d6f3500d65d21400198294.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:en",
+      "resource_name": "documents/56d9992fdc89441400fdb59c.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:zh",
+      "resource_name": "documents/56d9992fdc89441400fdb59c.zh.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:en",
+      "resource_name": "documents/56d9992fdc89441400fdb59e.en.md"
+    },
+    {
+      "document_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:zh",
+      "resource_name": "documents/56d9992fdc89441400fdb59e.zh.md"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:en",
+      "language": "en",
+      "question": "How many points did the Panthers defense surrender?",
+      "reference_answers": [
+        "308"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:zh",
+      "language": "zh",
+      "question": "黑豹队的防守丢了多少分？",
+      "reference_answers": [
+        "308"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925b:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:en",
+      "language": "en",
+      "question": "How many career sacks did Jared Allen have?",
+      "reference_answers": [
+        "136"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:zh",
+      "language": "zh",
+      "question": "贾里德在职业生涯中有多少次擒杀？",
+      "reference_answers": [
+        "136 次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925c:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:en",
+      "language": "en",
+      "question": "How many tackles did Luke Kuechly register?",
+      "reference_answers": [
+        "118"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:zh",
+      "language": "zh",
+      "question": "卢克·坎克利贡献了多少次擒抱？",
+      "reference_answers": [
+        "118"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925d:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:en",
+      "language": "en",
+      "question": "How many balls did Josh Norman intercept?",
+      "reference_answers": [
+        "four"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:zh",
+      "language": "zh",
+      "question": "约什·诺曼拦截了多少球？",
+      "reference_answers": [
+        "四次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925e:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:en",
+      "language": "en",
+      "question": "Who registered the most sacks on the team this season?",
+      "reference_answers": [
+        "Kawann Short"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:zh",
+      "language": "zh",
+      "question": "本赛季谁为球队贡献的擒杀最多？",
+      "reference_answers": [
+        "卡万·肖特"
+      ],
+      "gold_document_id": "xquad-mini-v1:56beb4343aeaaa14008c925f:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198290:en",
+      "language": "en",
+      "question": "How many interceptions are the Panthers defense credited with in 2015?",
+      "reference_answers": [
+        "24"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198290:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198290:zh",
+      "language": "zh",
+      "question": "2015年黑豹队的防守有多少次拦截记录？",
+      "reference_answers": [
+        "24 次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198290:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198291:en",
+      "language": "en",
+      "question": "Who led the Panthers in sacks?",
+      "reference_answers": [
+        "Kawann Short"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198291:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198291:zh",
+      "language": "zh",
+      "question": "谁带领黑豹队擒杀？",
+      "reference_answers": [
+        "卡万·肖特"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198291:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198292:en",
+      "language": "en",
+      "question": "How many Panthers defense players were selected for the Pro Bowl?",
+      "reference_answers": [
+        "four"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198292:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198292:zh",
+      "language": "zh",
+      "question": "有多少名黑豹队防守球员入选了职业碗？",
+      "reference_answers": [
+        "四次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198292:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198293:en",
+      "language": "en",
+      "question": "How many forced fumbles did Thomas Davis have?",
+      "reference_answers": [
+        "four"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198293:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198293:zh",
+      "language": "zh",
+      "question": "托马斯·戴维斯有多少次迫使掉球？",
+      "reference_answers": [
+        "四次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198293:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198294:en",
+      "language": "en",
+      "question": "Which player had the most interceptions for the season?",
+      "reference_answers": [
+        "Kurt Coleman"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198294:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d6f3500d65d21400198294:zh",
+      "language": "zh",
+      "question": "本赛季哪个球员拦截次数最多？",
+      "reference_answers": [
+        "科特·科尔曼"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d6f3500d65d21400198294:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:en",
+      "language": "en",
+      "question": "How many 2015 season interceptions did the Panthers' defense get?",
+      "reference_answers": [
+        "24"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:zh",
+      "language": "zh",
+      "question": "2015 赛季黑豹队的防守被拦截了多少次？",
+      "reference_answers": [
+        "24 次"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d9992fdc89441400fdb59c:zh"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:en",
+      "language": "en",
+      "question": "Who had five sacks in nine games as a Carolina Panthers starter?",
+      "reference_answers": [
+        "Kony Ealy"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:en"
+    },
+    {
+      "case_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:zh",
+      "language": "zh",
+      "question": "作为卡罗莱纳黑豹队的先发球员，谁在九场比赛中拿下了五次擒杀？",
+      "reference_answers": [
+        "科尼·伊利"
+      ],
+      "gold_document_id": "xquad-mini-v1:56d9992fdc89441400fdb59e:zh"
+    }
+  ]
+}
