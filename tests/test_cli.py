@@ -17,6 +17,7 @@ import pytest
 from personal_knowledge_agent.cli import build_parser, main
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
+    EvaluationStorageError,
     InvalidMemoryError,
     LanguageModelError,
     MemoryConflictError,
@@ -1293,6 +1294,117 @@ def test_ask_rejects_unknown_mode() -> None:
 
     assert result.returncode == 2
     assert "invalid choice" in result.stderr
+
+
+def scripted_24_case_model() -> ScriptedLanguageModel:
+    """Provide one structurally valid grounded result for each suite case."""
+    output = ModelOutput(
+        "fake-evaluation-model",
+        '{"status":"answered","answer":"Evaluation answer. [S1]",'
+        '"citation_ids":["S1"]}',
+        "stop",
+    )
+    return ScriptedLanguageModel((output,) * 24)
+
+
+def test_evaluate_parser_uses_private_defaults_without_database_option() -> None:
+    parsed = build_parser().parse_args(["evaluate"])
+
+    assert parsed.limit == 5
+    assert parsed.mode == "hybrid"
+    assert parsed.output == Path(".pka/reports/xquad-mini-v1.json")
+    assert not hasattr(parsed, "db")
+
+
+@pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
+def test_evaluate_parser_accepts_each_search_mode(mode: str) -> None:
+    parsed = build_parser().parse_args(["evaluate", "--mode", mode])
+
+    assert parsed.mode == mode
+
+
+def test_evaluate_uses_a_private_database_and_writes_report(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+
+    result = run_cli(
+        "evaluate",
+        "--output",
+        str(output),
+        language_model=scripted_24_case_model(),
+    )
+
+    assert result.returncode == 0
+    assert "Suite: xquad-mini v1 (24 cases)" in result.stdout
+    assert "Answer token F1:" in result.stdout
+    assert "English token F1:" in result.stdout
+    assert "Chinese token F1:" in result.stdout
+    assert str(output) in result.stdout
+    assert output.is_file()
+
+
+@pytest.mark.parametrize("limit", ["0", "11"])
+def test_evaluate_rejects_invalid_limit_before_runtime_construction(limit: str) -> None:
+    result = run_cli(
+        "evaluate",
+        "--limit",
+        limit,
+        forbid_model_construction=True,
+        forbid_embedder_construction=True,
+    )
+
+    assert result.returncode == 2
+    assert "between 1 and 10" in result.stderr
+
+
+def test_evaluate_requires_llm_configuration_before_runtime_construction() -> None:
+    result = run_cli(
+        "evaluate",
+        environment={},
+        forbid_model_construction=True,
+        forbid_embedder_construction=True,
+    )
+
+    assert result.returncode == 1
+    assert "PKA_LLM_API_KEY" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_evaluate_does_not_write_report_when_model_fails(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    result = run_cli(
+        "evaluate",
+        "--output",
+        str(output),
+        language_model=FakeLanguageModel(LanguageModelError("generation failed")),
+    )
+
+    assert result.returncode == 1
+    assert not output.exists()
+    assert result.stderr == "error: generation failed\n"
+
+
+def test_evaluate_reports_report_writer_errors_safely(tmp_path: Path) -> None:
+    with (
+        patch(
+            "personal_knowledge_agent.cli.EvaluationService.run",
+            return_value=object(),
+        ),
+        patch(
+            "personal_knowledge_agent.cli.write_report",
+            side_effect=EvaluationStorageError("report write failed"),
+        ),
+    ):
+        result = run_cli(
+            "evaluate",
+            "--output",
+            str(tmp_path / "report.json"),
+            language_model=scripted_24_case_model(),
+        )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "error: report write failed\n"
+    assert "Traceback" not in result.stderr
 
 
 def test_agent_parser_uses_safe_defaults() -> None:

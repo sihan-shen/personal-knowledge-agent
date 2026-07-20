@@ -11,6 +11,7 @@ from pathlib import Path
 
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
+from personal_knowledge_agent.application.evaluate import EvaluationService
 from personal_knowledge_agent.application.graph_answer import GraphAnswerService
 from personal_knowledge_agent.application.graph_build import GraphBuildService
 from personal_knowledge_agent.application.graph_query import GraphQueryService
@@ -28,6 +29,7 @@ from personal_knowledge_agent.domain.errors import (
     MemoryConflictError,
     MemoryStorageError,
 )
+from personal_knowledge_agent.domain.evaluation import EvaluationLanguage
 from personal_knowledge_agent.domain.graph import GraphNeighbor
 from personal_knowledge_agent.domain.graph_answer import GraphGroundedAnswer
 from personal_knowledge_agent.domain.memory import (
@@ -54,6 +56,7 @@ from personal_knowledge_agent.domain.models import (
 )
 from personal_knowledge_agent.domain.protocols import MemoryRecaller
 from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
+from personal_knowledge_agent.infrastructure.evaluation_report import write_report
 from personal_knowledge_agent.infrastructure.hybrid_question_router import (
     HybridQuestionRouter,
 )
@@ -90,10 +93,13 @@ from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import
 from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
     SQLiteMemoryStore,
 )
+from personal_knowledge_agent.infrastructure.xquad_suite import XQuadMiniSuiteLoader
 
 _DEFAULT_DATABASE = Path(".pka/knowledge.db")
 _DEFAULT_MEMORY_DATABASE = Path(".pka/memory.db")
 _DEFAULT_GRAPH_DATABASE = Path(".pka/graph.db")
+_DEFAULT_EVALUATION_DATABASE = Path(".pka/evaluations/xquad-mini-v1/knowledge.db")
+_DEFAULT_EVALUATION_REPORT = Path(".pka/reports/xquad-mini-v1.json")
 _SNIPPET_LENGTH = 160
 _SILENT_MEMORY_SKIP_REASONS = {
     MemoryExtractionSkipReason.PREFILTER_MISS,
@@ -203,6 +209,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=SearchMode.HYBRID.value,
     )
     ask_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate the local RAG pipeline on the packaged XQuAD-mini suite.",
+    )
+    evaluate_parser.add_argument("--limit", type=_answer_limit, default=5)
+    evaluate_parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in SearchMode],
+        default=SearchMode.HYBRID.value,
+    )
+    evaluate_parser.add_argument(
+        "--output",
+        type=Path,
+        default=_DEFAULT_EVALUATION_REPORT,
+    )
 
     agent_parser = subparsers.add_parser(
         "agent",
@@ -587,6 +609,42 @@ def _ask(query: str, limit: int, mode: SearchMode, database: Path) -> None:
     _print_answer(answer)
 
 
+def _percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
+    settings = load_llm_settings(os.environ)
+    embedder = E5Embedder()
+    index = SQLiteKeywordIndex(_DEFAULT_EVALUATION_DATABASE, embedder)
+    language_model = OpenAICompatibleChatModel(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        model_id=settings.model_id,
+    )
+    service = EvaluationService(
+        XQuadMiniSuiteLoader(),
+        IngestService(MarkdownLoader(), MarkdownChunker(), index),
+        AnswerService(SearchService(index), language_model),
+    )
+    report = service.run(mode=mode, limit=limit)
+    write_report(report, output)
+
+    overall = report.overall_summary
+    english = report.language_summaries[EvaluationLanguage.EN]
+    chinese = report.language_summaries[EvaluationLanguage.ZH]
+    print(
+        f"Suite: {report.suite_id} {report.suite_version} ({len(report.cases)} cases)"
+    )
+    print(f"Answer exact match: {_percent(overall.answer_exact_match)}")
+    print(f"Answer token F1: {_percent(overall.answer_token_f1)}")
+    print(f"Citation precision: {_percent(overall.citation_precision)}")
+    print(f"Citation recall: {_percent(overall.citation_recall)}")
+    print(f"English token F1: {_percent(english.answer_token_f1)}")
+    print(f"Chinese token F1: {_percent(chinese.answer_token_f1)}")
+    print(f"Report: {output}")
+
+
 def _format_route(decision: RouteDecision) -> str:
     if decision.source.value == "fallback":
         labels = {
@@ -927,6 +985,8 @@ def main(arguments: Sequence[str] | None = None) -> None:
             _search(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
         elif parsed.command == "ask":
             _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
+        elif parsed.command == "evaluate":
+            _evaluate(parsed.limit, SearchMode(parsed.mode), parsed.output)
         elif parsed.command == "agent":
             _agent(
                 parsed.query,
