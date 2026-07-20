@@ -5,7 +5,6 @@ from __future__ import annotations
 from personal_knowledge_agent.domain.graph import GraphChunkExtraction
 from personal_knowledge_agent.domain.models import Chunk
 from personal_knowledge_agent.domain.protocols import (
-    KnowledgeGraphExtractor,
     LanguageModel,
 )
 from personal_knowledge_agent.infrastructure.graph_prompt_builder import (

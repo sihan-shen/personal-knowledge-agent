@@ -132,6 +132,24 @@ class TestParseMissingFields:
         with pytest.raises(InvalidGraphSchemaError, match="extra"):
             parse_graph_extraction(output, _make_chunk())
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            '{"entities":[],"entities":[],"relations":[]}',
+            """{
+                "entities":[
+                    {"local_id":"E1","local_id":"E1","name":"RAG","type":"method"}
+                ],
+                "relations":[]
+            }""",
+        ],
+    )
+    def test_duplicate_json_fields_are_rejected(self, payload: str) -> None:
+        output = ModelOutput("test-model", payload, "stop")
+
+        with pytest.raises(InvalidGraphSchemaError, match="duplicate JSON field"):
+            parse_graph_extraction(output, _make_chunk())
+
 
 class TestParseNonListCollections:
     def test_entities_not_list(self) -> None:
@@ -317,6 +335,27 @@ class TestParseRelationContent:
             ],
         }
         output = ModelOutput("test-model", _to_json(payload), "stop")
+        with pytest.raises(InvalidGraphSchemaError, match="self-loop"):
+            parse_graph_extraction(output, chunk)
+
+    def test_same_normalized_name_with_different_types_is_rejected(self) -> None:
+        chunk = _make_chunk()
+        payload = {
+            "entities": [
+                {"local_id": "E1", "name": "RAG", "type": "method"},
+                {"local_id": "E2", "name": "rag", "type": "technology"},
+            ],
+            "relations": [
+                {
+                    "source_id": "E1",
+                    "type": "uses",
+                    "target_id": "E2",
+                    "evidence_quote": "RAG uses vector retrieval.",
+                },
+            ],
+        }
+        output = ModelOutput("test-model", _to_json(payload), "stop")
+
         with pytest.raises(InvalidGraphSchemaError, match="self-loop"):
             parse_graph_extraction(output, chunk)
 

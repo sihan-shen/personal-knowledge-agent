@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
+
+import pytest
 
 from personal_knowledge_agent.application.graph_build import GraphBuildService
+from personal_knowledge_agent.domain.errors import InvalidGraphError
 from personal_knowledge_agent.domain.graph import (
     GraphBuildResult,
     GraphChunkExtraction,
@@ -34,12 +37,16 @@ class _FakeExtractor:
     def extract(self, chunk: Chunk) -> GraphChunkExtraction:
         self.calls.append(chunk)
         idx = min(len(self.calls) - 1, len(self._results) - 1)
-        return self._results[idx] if self._results else GraphChunkExtraction(chunk, (), ())
+        return (
+            self._results[idx] if self._results else GraphChunkExtraction(chunk, (), ())
+        )
 
 
 class _FakeStore:
     def __init__(self) -> None:
-        self.replace_calls: list[tuple[GraphSourceDocument, tuple[GraphChunkExtraction, ...]]] = []
+        self.replace_calls: list[
+            tuple[GraphSourceDocument, tuple[GraphChunkExtraction, ...]]
+        ] = []
 
     def replace_document(
         self,
@@ -73,6 +80,7 @@ class TestGraphBuildService:
 
         result = service.build(Path("/test.md"))
         assert len(reader.calls) == 1
+        assert reader.calls == [Path("/test.md").resolve()]
         assert result.chunks == 1
 
     def test_calls_extractor_for_each_chunk(self) -> None:
@@ -100,3 +108,43 @@ class TestGraphBuildService:
 
         service.build(Path("/test.md"))
         assert len(store.replace_calls) == 1
+
+    def test_mismatched_extraction_stops_before_store_replacement(self) -> None:
+        chunk = Chunk("c1", "d1", 0, "test")
+        document = GraphSourceDocument("d1", Path("/test.md"), "a" * 64, (chunk,))
+        wrong_chunk = Chunk("wrong", "d1", 0, "test")
+        reader = _FakeSourceReader(document)
+        extractor = _FakeExtractor((GraphChunkExtraction(wrong_chunk, (), ()),))
+        store = _FakeStore()
+
+        with pytest.raises(InvalidGraphError, match="different chunk"):
+            GraphBuildService(reader, extractor, store).build(Path("/test.md"))
+
+        assert len(store.replace_calls) == 0
+
+    def test_extraction_failure_stops_later_chunks_and_store_replacement(self) -> None:
+        chunks = (
+            Chunk("c1", "d1", 0, "first"),
+            Chunk("c2", "d1", 1, "second"),
+            Chunk("c3", "d1", 2, "third"),
+        )
+        document = GraphSourceDocument("d1", Path("/test.md"), "a" * 64, chunks)
+        reader = _FakeSourceReader(document)
+        store = _FakeStore()
+
+        class _FailingExtractor:
+            def __init__(self) -> None:
+                self.calls: list[Chunk] = []
+
+            def extract(self, chunk: Chunk) -> GraphChunkExtraction:
+                self.calls.append(chunk)
+                if len(self.calls) == 2:
+                    raise RuntimeError("extraction failed")
+                return GraphChunkExtraction(chunk, (), ())
+
+        extractor = _FailingExtractor()
+        with pytest.raises(RuntimeError, match="extraction failed"):
+            GraphBuildService(reader, extractor, store).build(Path("/test.md"))
+
+        assert extractor.calls == list(chunks[:2])
+        assert store.replace_calls == []

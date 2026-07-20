@@ -4,7 +4,7 @@ A personal knowledge-management system built incrementally with RAG and Agent pa
 
 ## Current scope
 
-Phase 3B provides persistent Markdown ingestion, Chinese/English lexical, semantic,
+Phase 4A provides persistent Markdown ingestion, Chinese/English lexical, semantic,
 and hybrid retrieval, evidence-grounded answers through an OpenAI-compatible Chat
 Completions endpoint, a conservative Agent router, and confirmation-gated long-term
 memory with conservative request-local recall. Embeddings run locally on CPU and
@@ -12,6 +12,10 @@ are stored in SQLite alongside each BM25 index. `pka ask` remains a fixed
 document-only RAG pipeline; `pka agent` visibly chooses a safe local direct response
 or a retrieval path that may combine document evidence with confirmed active
 memories, then may propose a new memory after a successful response.
+
+Phase 4A also provides a separate, inspectable knowledge graph. It is built only
+on request from chunks already stored in the Markdown knowledge index. The graph
+does not influence `ask`, `agent`, routing, or long-term memory.
 
 ## Prerequisites
 
@@ -255,6 +259,61 @@ more than one billable request. Authentication, permission, bad-request, rate-li
 timeout, connection, server, truncation, schema, and citation failures become concise
 CLI errors without echoing provider payloads. Automated tests use deterministic
 fakes and never call DeepSeek or incur API cost.
+
+## Build and inspect a knowledge graph
+
+Build one already-indexed Markdown source explicitly. This sends the current heading
+path and full text of each indexed chunk to the configured LLM once; provider retries
+can make more billable attempts. The source path, stable chunk/document IDs, graph
+database path, scores, memories, vectors, and credentials remain local.
+
+```bash
+uv run pka graph build notes/rag.md
+uv run pka graph build notes/rag.md \
+  --db data/knowledge.db \
+  --graph-db data/graph.db
+```
+
+The graph uses a deliberately small ontology: entity types are `concept`,
+`technology`, `method`, `project`, and `resource`; relation types are `is_a`,
+`part_of`, `uses`, `depends_on`, `implements`, and `related_to`. Entity identity is
+exact `(type, NFKC/casefold/whitespace-normalized name)`, not semantic similarity.
+Every retained relation has an exact quote from one chunk plus its local source,
+heading, and chunk provenance.
+
+Build output reports only the selected document's contribution:
+
+```text
+Built graph for /absolute/path/notes/rag.md
+Chunks processed: 6
+Entities contributed: 14
+Relations contributed: 18
+Evidence records: 21
+```
+
+Search and inspect the graph locally; these commands do not load E5, LLM settings,
+or a provider client:
+
+```bash
+uv run pka graph search "vector retrieval" --limit 10
+uv run pka graph show ent_ab12... --graph-db .pka/graph.db
+```
+
+`graph search` uses local mixed Chinese/English BM25 over entity names. `graph show`
+prints one hop of incoming and outgoing relations and every evidence quote with its
+source and heading. A missing or empty graph is reported safely and is not created by
+a query command.
+
+The default graph database is `.pka/graph.db`, separate from `.pka/knowledge.db` and
+`.pka/memory.db`. Reingesting a document does not rebuild its graph automatically:
+the graph remains its last successful snapshot until you explicitly run `graph build`
+again. SQLite storage is local and unencrypted. Replacement deletes application rows,
+but cannot guarantee secure erasure from SQLite pages, filesystem snapshots, caches,
+or provider systems.
+
+Phase 4A intentionally excludes GraphRAG, graph context in answers, natural-language
+graph queries, multi-hop traversal, aliases or fuzzy entity merging, graph editing,
+PDF/web/code ingestion, visualization, and external graph services.
 
 ## Manage confirmation-gated long-term memory
 

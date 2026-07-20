@@ -24,6 +24,17 @@ from personal_knowledge_agent.domain.errors import (
     MemoryStorageError,
     UnsafeMemoryError,
 )
+from personal_knowledge_agent.domain.graph import (
+    EntityType,
+    GraphChunkExtraction,
+    GraphEntity,
+    GraphRelation,
+    GraphRelationEvidence,
+    GraphSourceDocument,
+    RelationType,
+    make_entity_id,
+    make_relation_id,
+)
 from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
     MemoryProposal,
@@ -33,8 +44,11 @@ from personal_knowledge_agent.domain.memory import (
     MemoryType,
     memory_source_hash,
 )
-from personal_knowledge_agent.domain.models import MessageRole, ModelOutput
+from personal_knowledge_agent.domain.models import Chunk, MessageRole, ModelOutput
 from personal_knowledge_agent.domain.protocols import LanguageModel
+from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import (
+    SQLiteKnowledgeGraphStore,
+)
 from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
     SQLiteMemoryStore,
 )
@@ -2655,6 +2669,7 @@ def test_ask_reports_provider_and_validation_failures_without_traceback(
 class TestGraphParser:
     def test_build_parser(self) -> None:
         from personal_knowledge_agent.cli import build_parser
+
         parser = build_parser()
         args = parser.parse_args(["graph", "build", "/tmp/test.md"])
         assert args.command == "graph"
@@ -2663,6 +2678,7 @@ class TestGraphParser:
 
     def test_search_parser(self) -> None:
         from personal_knowledge_agent.cli import build_parser
+
         parser = build_parser()
         args = parser.parse_args(["graph", "search", "RAG"])
         assert args.command == "graph"
@@ -2671,8 +2687,212 @@ class TestGraphParser:
 
     def test_show_parser(self) -> None:
         from personal_knowledge_agent.cli import build_parser
+
         parser = build_parser()
         args = parser.parse_args(["graph", "show", "ent_abc123"])
         assert args.command == "graph"
         assert args.graph_command == "show"
         assert args.entity_id == "ent_abc123"
+
+
+def test_graph_show_prints_relation_direction_and_complete_provenance(
+    tmp_path: Path,
+) -> None:
+    graph_database = tmp_path / "graph.db"
+    rag = GraphEntity(
+        make_entity_id(EntityType.METHOD, "RAG"),
+        EntityType.METHOD,
+        "RAG",
+    )
+    vector_retrieval = GraphEntity(
+        make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval"),
+        EntityType.TECHNOLOGY,
+        "Vector Retrieval",
+    )
+    chunk = Chunk(
+        "c1",
+        "doc1",
+        0,
+        "RAG uses vector retrieval.",
+        ("Architecture",),
+    )
+    relation = GraphRelation(
+        make_relation_id(
+            RelationType.USES,
+            rag.entity_id,
+            vector_retrieval.entity_id,
+        ),
+        RelationType.USES,
+        rag.entity_id,
+        vector_retrieval.entity_id,
+    )
+    extraction = GraphChunkExtraction(
+        chunk,
+        (rag, vector_retrieval),
+        (GraphRelationEvidence(relation, "RAG uses vector retrieval."),),
+    )
+    source_document = GraphSourceDocument(
+        "doc1",
+        Path("/notes/rag.md"),
+        "a" * 64,
+        (chunk,),
+    )
+    SQLiteKnowledgeGraphStore(graph_database).replace_document(
+        source_document,
+        (extraction,),
+    )
+
+    result = run_cli(
+        "graph",
+        "show",
+        rag.entity_id,
+        "--graph-db",
+        str(graph_database),
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        f"Entity: [{rag.entity_id}] method RAG\n"
+        "\n"
+        "Outgoing:\n"
+        f"uses -> [{vector_retrieval.entity_id}] technology Vector Retrieval\n"
+        "  [1] /notes/rag.md > Architecture\n"
+        "      RAG uses vector retrieval.\n"
+    )
+
+
+def test_graph_search_does_not_create_a_database_when_none_exists(
+    tmp_path: Path,
+) -> None:
+    graph_database = tmp_path / "not-created" / "graph.db"
+
+    result = run_cli(
+        "graph",
+        "search",
+        "RAG",
+        "--graph-db",
+        str(graph_database),
+    )
+
+    assert result.returncode == 1
+    assert "empty" in result.stderr.lower()
+    assert not graph_database.exists()
+
+
+def test_graph_build_rejects_an_unindexed_source_before_model_setup(
+    tmp_path: Path,
+) -> None:
+    knowledge_database = tmp_path / "knowledge.db"
+    graph_database = tmp_path / "not-created" / "graph.db"
+    with sqlite3.connect(knowledge_database) as connection:
+        connection.execute(
+            "CREATE TABLE documents ("
+            "document_id TEXT PRIMARY KEY, source TEXT UNIQUE NOT NULL, "
+            "content_hash TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE chunks ("
+            "chunk_id TEXT PRIMARY KEY, document_id TEXT NOT NULL, "
+            "position INTEGER NOT NULL, text TEXT NOT NULL, "
+            "heading_path TEXT NOT NULL, token_count INTEGER NOT NULL)"
+        )
+
+    with patch(
+        "personal_knowledge_agent.infrastructure.llm_settings.load_llm_settings",
+        side_effect=AssertionError("model setup must not run"),
+    ):
+        result = run_cli(
+            "graph",
+            "build",
+            str(tmp_path / "unindexed.md"),
+            "--db",
+            str(knowledge_database),
+            "--graph-db",
+            str(graph_database),
+        )
+
+    assert result.returncode == 1
+    assert "not found in knowledge index" in result.stderr
+    assert not graph_database.exists()
+
+
+def test_graph_build_extracts_each_indexed_chunk_and_reports_local_counts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "rag.md"
+    source.write_text("placeholder", encoding="utf-8")
+    knowledge_database = tmp_path / "knowledge.db"
+    graph_database = tmp_path / "graph.db"
+    source_text = str(source.resolve())
+    with sqlite3.connect(knowledge_database) as connection:
+        connection.execute(
+            "CREATE TABLE documents ("
+            "document_id TEXT PRIMARY KEY, source TEXT UNIQUE NOT NULL, "
+            "content_hash TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE chunks ("
+            "chunk_id TEXT PRIMARY KEY, document_id TEXT NOT NULL, "
+            "position INTEGER NOT NULL, text TEXT NOT NULL, "
+            "heading_path TEXT NOT NULL, token_count INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO documents(document_id, source, content_hash) VALUES (?, ?, ?)",
+            ("document-1", source_text, "a" * 64),
+        )
+        connection.executemany(
+            "INSERT INTO chunks("
+            "chunk_id, document_id, position, text, heading_path, token_count"
+            ") VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "chunk-1",
+                    "document-1",
+                    0,
+                    "RAG uses vector retrieval.",
+                    '["Architecture"]',
+                    4,
+                ),
+                (
+                    "chunk-2",
+                    "document-1",
+                    1,
+                    "RAG uses vector retrieval.",
+                    '["Retrieval"]',
+                    4,
+                ),
+            ],
+        )
+    output = ModelOutput(
+        "fake-model",
+        '{"entities":[{"local_id":"E1","name":"RAG","type":"method"},'
+        '{"local_id":"E2","name":"Vector Retrieval","type":"technology"}],'
+        '"relations":[{"source_id":"E1","type":"uses","target_id":"E2",'
+        '"evidence_quote":"RAG uses vector retrieval."}]}',
+        "stop",
+    )
+    model = ScriptedLanguageModel((output, output))
+
+    result = run_cli(
+        "graph",
+        "build",
+        str(source),
+        "--db",
+        str(knowledge_database),
+        "--graph-db",
+        str(graph_database),
+        language_model=model,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        f"Built graph for {source_text}\n"
+        "Chunks processed: 2\n"
+        "Entities contributed: 2\n"
+        "Relations contributed: 1\n"
+        "Evidence records: 2\n"
+    )
+    assert graph_database.is_file()
+    assert len(model.calls) == 2

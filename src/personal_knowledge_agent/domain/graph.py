@@ -70,6 +70,11 @@ def normalize_entity_name(name: str) -> str:
     return collapsed.strip()
 
 
+def _normalize_display_name(name: str) -> str:
+    """Normalize a display spelling without applying casefolding."""
+    return _collapse_whitespace(unicodedata.normalize("NFKC", name)).strip()
+
+
 def _collapse_whitespace(text: str) -> str:
     """Collapse any contiguous whitespace into a single space."""
     return re.sub(r"\s+", " ", text)
@@ -117,7 +122,18 @@ def make_relation_id(
 # ---------------------------------------------------------------------------
 
 
-class GraphEntity:
+class _ImmutableGraphValue:
+    """Prevent validated domain records from being changed after construction."""
+
+    __slots__ = ()
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if hasattr(self, name):
+            raise AttributeError(f"{type(self).__name__} is immutable")
+        object.__setattr__(self, name, value)
+
+
+class GraphEntity(_ImmutableGraphValue):
     """One typed entity in the knowledge graph."""
 
     __slots__ = ("entity_id", "entity_type", "display_name")
@@ -128,10 +144,22 @@ class GraphEntity:
         entity_type: EntityType,
         display_name: str,
     ) -> None:
-        _require_text(display_name, "name")
-        self.entity_id = entity_id
+        if not isinstance(entity_type, EntityType):
+            raise ValueError("entity_type must be an EntityType")
+        if not isinstance(display_name, str):
+            raise ValueError("name must be a string")
+        normalized_display_name = _normalize_display_name(display_name)
+        _require_text(normalized_display_name, "name")
+        if len(normalized_display_name) > MAX_GRAPH_ENTITY_NAME_LENGTH:
+            raise ValueError(
+                f"name must not exceed {MAX_GRAPH_ENTITY_NAME_LENGTH} code points"
+            )
+        expected_entity_id = make_entity_id(entity_type, normalized_display_name)
+        if entity_id != expected_entity_id:
+            raise ValueError("entity_id does not match entity identity")
+        self.entity_id = expected_entity_id
         self.entity_type = entity_type
-        self.display_name = display_name
+        self.display_name = normalized_display_name
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, GraphEntity):
@@ -153,7 +181,7 @@ class GraphEntity:
         )
 
 
-class GraphRelation:
+class GraphRelation(_ImmutableGraphValue):
     """One typed relation between two entities."""
 
     __slots__ = ("relation_id", "relation_type", "source_entity_id", "target_entity_id")
@@ -165,7 +193,22 @@ class GraphRelation:
         source_entity_id: str,
         target_entity_id: str,
     ) -> None:
-        self.relation_id = relation_id
+        if not isinstance(relation_type, RelationType):
+            raise ValueError("relation_type must be a RelationType")
+        _require_text(source_entity_id, "source_entity_id")
+        _require_text(target_entity_id, "target_entity_id")
+        if relation_type is RelationType.RELATED_TO:
+            source_entity_id, target_entity_id = sorted(
+                (source_entity_id, target_entity_id)
+            )
+        expected_relation_id = make_relation_id(
+            relation_type,
+            source_entity_id,
+            target_entity_id,
+        )
+        if relation_id != expected_relation_id:
+            raise ValueError("relation_id does not match relation identity")
+        self.relation_id = expected_relation_id
         self.relation_type = relation_type
         self.source_entity_id = source_entity_id
         self.target_entity_id = target_entity_id
@@ -199,32 +242,39 @@ class GraphRelation:
         )
 
 
-class GraphRelationEvidence:
-    """One relation paired with its exact supporting quote."""
+class GraphRelationEvidence(_ImmutableGraphValue):
+    """One complete relation paired with its exact supporting quote."""
 
-    __slots__ = ("relation_id", "evidence_quote")
+    __slots__ = ("relation", "evidence_quote")
 
-    def __init__(self, relation_id: str, evidence_quote: str) -> None:
+    def __init__(self, relation: GraphRelation, evidence_quote: str) -> None:
+        if not isinstance(relation, GraphRelation):
+            raise ValueError("relation must be a GraphRelation")
         _require_text(evidence_quote, "evidence_quote")
-        self.relation_id = relation_id
+        if len(evidence_quote) > MAX_GRAPH_EVIDENCE_QUOTE_LENGTH:
+            raise ValueError(
+                "evidence_quote must not exceed "
+                f"{MAX_GRAPH_EVIDENCE_QUOTE_LENGTH} code points"
+            )
+        self.relation = relation
         self.evidence_quote = evidence_quote
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, GraphRelationEvidence):
             return NotImplemented
         return (
-            self.relation_id == other.relation_id
+            self.relation == other.relation
             and self.evidence_quote == other.evidence_quote
         )
 
     def __hash__(self) -> int:
-        return hash((self.relation_id, self.evidence_quote))
+        return hash((self.relation, self.evidence_quote))
 
     def __repr__(self) -> str:
-        return f"GraphRelationEvidence(relation_id={self.relation_id!r})"
+        return f"GraphRelationEvidence(relation_id={self.relation.relation_id!r})"
 
 
-class GraphChunkExtraction:
+class GraphChunkExtraction(_ImmutableGraphValue):
     """One chunk's full validated extraction result."""
 
     __slots__ = ("chunk", "entities", "relation_evidence")
@@ -247,6 +297,21 @@ class GraphChunkExtraction:
                 f"at most {MAX_GRAPH_RELATIONS_PER_CHUNK} relations per chunk, "
                 f"got {len(relation_evidence_tuple)}"
             )
+        entity_ids = {entity.entity_id for entity in entities_tuple}
+        evidence_keys: set[tuple[str, str]] = set()
+        for item in relation_evidence_tuple:
+            relation = item.relation
+            if (
+                relation.source_entity_id not in entity_ids
+                or relation.target_entity_id not in entity_ids
+            ):
+                raise ValueError("relation endpoints must belong to the extraction")
+            if item.evidence_quote not in chunk.text:
+                raise ValueError("evidence_quote must be an exact chunk substring")
+            key = (relation.relation_id, item.evidence_quote)
+            if key in evidence_keys:
+                raise ValueError("relation evidence must be unique within a chunk")
+            evidence_keys.add(key)
         self.chunk = chunk
         self.entities = entities_tuple
         self.relation_evidence = relation_evidence_tuple
@@ -271,7 +336,7 @@ class GraphChunkExtraction:
         )
 
 
-class GraphSourceDocument:
+class GraphSourceDocument(_ImmutableGraphValue):
     """One indexed source document loaded for graph building.
 
     Contains the document metadata and all its current chunks in order.
@@ -331,7 +396,7 @@ class GraphSourceDocument:
         )
 
 
-class GraphBuildResult:
+class GraphBuildResult(_ImmutableGraphValue):
     """Summary counts from one document graph build."""
 
     __slots__ = ("source", "chunks", "entities", "relations", "evidence")
@@ -388,7 +453,7 @@ class GraphBuildResult:
         )
 
 
-class GraphProvenance:
+class GraphProvenance(_ImmutableGraphValue):
     """Complete provenance for one supported relation instance."""
 
     __slots__ = (
@@ -446,7 +511,7 @@ class GraphProvenance:
         )
 
 
-class GraphNeighbor:
+class GraphNeighbor(_ImmutableGraphValue):
     """One neighbor entity with its relation type and provenance."""
 
     __slots__ = (
@@ -503,7 +568,7 @@ class GraphNeighbor:
         )
 
 
-class EntityNeighborhood:
+class EntityNeighborhood(_ImmutableGraphValue):
     """A selected entity with its outgoing and incoming relations."""
 
     __slots__ = ("entity", "outgoing", "incoming")
@@ -538,7 +603,7 @@ class EntityNeighborhood:
         )
 
 
-class EntitySearchResult:
+class EntitySearchResult(_ImmutableGraphValue):
     """One entity matched by a local search query."""
 
     __slots__ = ("entity_id", "entity_type", "display_name", "score")

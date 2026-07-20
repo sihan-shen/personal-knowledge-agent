@@ -6,9 +6,9 @@ import re
 
 from personal_knowledge_agent.domain.errors import InvalidGraphError
 from personal_knowledge_agent.domain.graph import (
+    MAX_GRAPH_SEARCH_LIMIT,
     EntityNeighborhood,
     EntitySearchResult,
-    MAX_GRAPH_SEARCH_LIMIT,
 )
 from personal_knowledge_agent.domain.protocols import KnowledgeGraphStore
 

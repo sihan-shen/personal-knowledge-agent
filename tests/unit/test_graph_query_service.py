@@ -7,9 +7,9 @@ import pytest
 from personal_knowledge_agent.application.graph_query import GraphQueryService
 from personal_knowledge_agent.domain.errors import InvalidGraphError
 from personal_knowledge_agent.domain.graph import (
-    EntityType,
-    EntitySearchResult,
     EntityNeighborhood,
+    EntitySearchResult,
+    EntityType,
 )
 
 

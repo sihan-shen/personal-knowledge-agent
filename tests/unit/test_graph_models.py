@@ -179,6 +179,33 @@ class TestGraphEntity:
                 "   ",
             )
 
+    def test_normalizes_display_name_without_changing_case(self) -> None:
+        entity = GraphEntity(
+            make_entity_id(EntityType.METHOD, "RAG Model"),
+            EntityType.METHOD,
+            "  ＲＡＧ\tModel  ",
+        )
+
+        assert entity.display_name == "RAG Model"
+
+    def test_rejects_an_id_for_a_different_identity(self) -> None:
+        with pytest.raises(ValueError, match="entity_id"):
+            GraphEntity(
+                make_entity_id(EntityType.METHOD, "RAG"),
+                EntityType.METHOD,
+                "Vector Retrieval",
+            )
+
+    def test_is_immutable_after_construction(self) -> None:
+        entity = GraphEntity(
+            make_entity_id(EntityType.METHOD, "RAG"),
+            EntityType.METHOD,
+            "RAG",
+        )
+
+        with pytest.raises(AttributeError):
+            entity.display_name = "Tampered"
+
 
 # ---------------------------------------------------------------------------
 # GraphRelation
@@ -190,25 +217,53 @@ class TestGraphRelation:
         eid_a = make_entity_id(EntityType.CONCEPT, "A")
         eid_b = make_entity_id(EntityType.CONCEPT, "B")
         rel = GraphRelation(
-            make_relation_id(RelationType.RELATED_TO, eid_a, eid_b),
+            make_relation_id(RelationType.RELATED_TO, eid_b, eid_a),
             RelationType.RELATED_TO,
-            eid_a,
             eid_b,
+            eid_a,
         )
-        assert rel.source_entity_id == eid_a
-        assert rel.target_entity_id == eid_b
+        assert rel.source_entity_id == min(eid_a, eid_b)
+        assert rel.target_entity_id == max(eid_a, eid_b)
+
+    def test_rejects_an_id_for_a_different_relation(self) -> None:
+        source_id = make_entity_id(EntityType.METHOD, "RAG")
+        target_id = make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval")
+        with pytest.raises(ValueError, match="relation_id"):
+            GraphRelation(
+                make_relation_id(RelationType.DEPENDS_ON, source_id, target_id),
+                RelationType.USES,
+                source_id,
+                target_id,
+            )
 
     def test_store_quote(self) -> None:
+        source_id = make_entity_id(EntityType.METHOD, "RAG")
+        target_id = make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval")
+        relation = GraphRelation(
+            make_relation_id(RelationType.USES, source_id, target_id),
+            RelationType.USES,
+            source_id,
+            target_id,
+        )
         evidence = GraphRelationEvidence(
-            "rel_abcd1234abcd1234abcd1234abcd1234",
+            relation,
             "RAG uses vector retrieval.",
         )
+        assert evidence.relation is relation
         assert evidence.evidence_quote == "RAG uses vector retrieval."
 
     def test_blank_quote_raises(self) -> None:
+        source_id = make_entity_id(EntityType.METHOD, "RAG")
+        target_id = make_entity_id(EntityType.TECHNOLOGY, "Vector Retrieval")
+        relation = GraphRelation(
+            make_relation_id(RelationType.USES, source_id, target_id),
+            RelationType.USES,
+            source_id,
+            target_id,
+        )
         with pytest.raises(ValueError, match="evidence_quote must not be blank"):
             GraphRelationEvidence(
-                "rel_abcd1234abcd1234abcd1234abcd1234",
+                relation,
                 "  ",
             )
 
@@ -232,7 +287,12 @@ class TestGraphChunkExtraction:
         assert extraction.relation_evidence == ()
 
     def test_too_many_entities_raises(self) -> None:
-        chunk = Chunk("c1", "d1", 0, "x")
+        chunk = Chunk(
+            "c1",
+            "d1",
+            0,
+            " ".join(f"evidence {index}" for index in range(21)),
+        )
         entities = tuple(
             GraphEntity(
                 make_entity_id(EntityType.CONCEPT, str(i)),
@@ -252,12 +312,15 @@ class TestGraphChunkExtraction:
             GraphEntity(eid_a, EntityType.CONCEPT, "A"),
             GraphEntity(eid_b, EntityType.CONCEPT, "B"),
         )
+        relation = GraphRelation(
+            make_relation_id(RelationType.RELATED_TO, eid_a, eid_b),
+            RelationType.RELATED_TO,
+            eid_a,
+            eid_b,
+        )
         relation_evidence = tuple(
-            GraphRelationEvidence(
-                make_relation_id(RelationType.RELATED_TO, eid_a, eid_b),
-                f"evidence {i}",
-            )
-            for i in range(MAX_GRAPH_RELATIONS_PER_CHUNK + 1)
+            GraphRelationEvidence(relation, f"evidence {index}")
+            for index in range(MAX_GRAPH_RELATIONS_PER_CHUNK + 1)
         )
         with pytest.raises(
             ValueError, match=f"at most {MAX_GRAPH_RELATIONS_PER_CHUNK}"

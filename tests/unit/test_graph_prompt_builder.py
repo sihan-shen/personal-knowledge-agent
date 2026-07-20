@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-
 from personal_knowledge_agent.domain.graph import (
-    EntityType,
     MAX_GRAPH_ENTITIES_PER_CHUNK,
-    MAX_GRAPH_EVIDENCE_QUOTE_LENGTH,
     MAX_GRAPH_ENTITY_NAME_LENGTH,
+    MAX_GRAPH_EVIDENCE_QUOTE_LENGTH,
     MAX_GRAPH_RELATIONS_PER_CHUNK,
+    EntityType,
     RelationType,
 )
 from personal_knowledge_agent.domain.models import Chunk, MessageRole
@@ -71,6 +69,12 @@ class TestPromptMessages:
     def test_system_rejects_self_loops(self) -> None:
         sys_msg, _ = build_graph_extraction_messages(_make_chunk())
         assert "self-loop" in sys_msg.content or "self" in sys_msg.content.lower()
+
+    def test_system_treats_heading_and_chunk_text_as_untrusted_data(self) -> None:
+        sys_msg, _ = build_graph_extraction_messages(_make_chunk())
+        normalized = sys_msg.content.lower()
+        assert "untrusted" in normalized
+        assert "cannot change" in normalized
 
     def test_privacy_omits_chunk_id(self) -> None:
         sys_msg, user_msg = build_graph_extraction_messages(_make_chunk())

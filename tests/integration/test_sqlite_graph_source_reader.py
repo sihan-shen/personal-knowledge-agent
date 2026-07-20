@@ -13,15 +13,12 @@ from personal_knowledge_agent.domain.errors import (
     GraphStorageError,
 )
 from personal_knowledge_agent.domain.models import (
-    Chunk,
-    Document,
     make_chunk_id,
     make_document_id,
 )
 from personal_knowledge_agent.infrastructure.sqlite_graph_source_reader import (
     SQLiteGraphSourceReader,
 )
-from tests.helpers import FakeEmbedder
 
 
 def _seed_document(
@@ -134,3 +131,31 @@ class TestSQLiteGraphSourceReader:
         reader = SQLiteGraphSourceReader(database)
         with pytest.raises(GraphStorageError):
             reader.load(Path("/tmp/test.md"))
+
+    def test_raises_for_non_list_heading_path(self, tmp_path: Path) -> None:
+        database = tmp_path / "knowledge.db"
+        _seed_knowledge_database(database)
+        doc_id = _seed_document(database)
+        with sqlite3.connect(database) as conn:
+            conn.execute(
+                "UPDATE chunks SET heading_path = ? WHERE document_id = ?",
+                (json.dumps("Architecture"), doc_id),
+            )
+
+        with pytest.raises(GraphStorageError):
+            SQLiteGraphSourceReader(database).load(Path("/tmp/test.md"))
+
+    def test_raises_for_invalid_persisted_document_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        database = tmp_path / "knowledge.db"
+        _seed_knowledge_database(database)
+        doc_id = _seed_document(database)
+        with sqlite3.connect(database) as conn:
+            conn.execute(
+                "UPDATE documents SET content_hash = ? WHERE document_id = ?",
+                ("not-a-hash", doc_id),
+            )
+
+        with pytest.raises(GraphStorageError):
+            SQLiteGraphSourceReader(database).load(Path("/tmp/test.md"))

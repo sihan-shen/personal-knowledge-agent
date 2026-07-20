@@ -11,6 +11,8 @@ from pathlib import Path
 
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
+from personal_knowledge_agent.application.graph_build import GraphBuildService
+from personal_knowledge_agent.application.graph_query import GraphQueryService
 from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.application.memory_admin import MemoryAdminService
 from personal_knowledge_agent.application.memory_aware_answer import (
@@ -25,6 +27,7 @@ from personal_knowledge_agent.domain.errors import (
     MemoryConflictError,
     MemoryStorageError,
 )
+from personal_knowledge_agent.domain.graph import GraphNeighbor
 from personal_knowledge_agent.domain.memory import (
     MAX_MEMORY_EXTRACTION_INPUT_LENGTH,
     MemoryActivationAction,
@@ -52,6 +55,9 @@ from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.hybrid_question_router import (
     HybridQuestionRouter,
 )
+from personal_knowledge_agent.infrastructure.llm_knowledge_graph_extractor import (
+    LLMKnowledgeGraphExtractor,
+)
 from personal_knowledge_agent.infrastructure.llm_memory_extractor import (
     LLMMemoryExtractor,
 )
@@ -70,8 +76,14 @@ from personal_knowledge_agent.infrastructure.memory_safety import (
 from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import (
     OpenAICompatibleChatModel,
 )
+from personal_knowledge_agent.infrastructure.sqlite_graph_source_reader import (
+    SQLiteGraphSourceReader,
+)
 from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
     SQLiteKeywordIndex,
+)
+from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import (
+    SQLiteKnowledgeGraphStore,
 )
 from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
     SQLiteMemoryStore,
@@ -79,12 +91,6 @@ from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
 
 _DEFAULT_DATABASE = Path(".pka/knowledge.db")
 _DEFAULT_MEMORY_DATABASE = Path(".pka/memory.db")
-from personal_knowledge_agent.application.graph_build import GraphBuildService
-from personal_knowledge_agent.application.graph_query import GraphQueryService
-from personal_knowledge_agent.domain.errors import GraphFeatureError, GraphSourceNotFoundError, InvalidGraphError, GraphEmptyError, GraphEntityNotFoundError
-from personal_knowledge_agent.infrastructure.llm_knowledge_graph_extractor import LLMKnowledgeGraphExtractor
-from personal_knowledge_agent.infrastructure.sqlite_graph_source_reader import SQLiteGraphSourceReader
-from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import SQLiteKnowledgeGraphStore
 _DEFAULT_GRAPH_DATABASE = Path(".pka/graph.db")
 _SNIPPET_LENGTH = 160
 _SILENT_MEMORY_SKIP_REASONS = {
@@ -199,6 +205,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
     _add_memory_database_argument(agent_parser)
+
+    graph_parser = subparsers.add_parser(
+        "graph",
+        help="Manage knowledge graphs.",
+    )
+    graph_subparsers = graph_parser.add_subparsers(
+        dest="graph_command",
+        required=True,
+    )
+
+    build_parser = graph_subparsers.add_parser(
+        "build",
+        help="Build a knowledge graph from one indexed document.",
+    )
+    build_parser.add_argument("source", type=Path)
+    build_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
+    build_parser.add_argument("--graph-db", type=Path, default=_DEFAULT_GRAPH_DATABASE)
+
+    graph_search_parser = graph_subparsers.add_parser(
+        "search",
+        help="Search graph entities.",
+    )
+    graph_search_parser.add_argument("query")
+    graph_search_parser.add_argument("--limit", type=_search_limit, default=10)
+    graph_search_parser.add_argument(
+        "--graph-db", type=Path, default=_DEFAULT_GRAPH_DATABASE
+    )
+
+    show_parser = graph_subparsers.add_parser(
+        "show",
+        help="Show one graph entity with its relations.",
+    )
+    show_parser.add_argument("entity_id")
+    show_parser.add_argument("--graph-db", type=Path, default=_DEFAULT_GRAPH_DATABASE)
 
     memory_parser = subparsers.add_parser(
         "memory",
@@ -733,15 +773,17 @@ def _agent(
 
 
 def _graph_build(source: Path, database: Path, graph_database: Path) -> None:
-    import os
-    from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
-    from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import OpenAICompatibleChatModel
-    settings = load_llm_settings(os.environ)
-    language_model = OpenAICompatibleChatModel(api_key=settings.api_key, base_url=settings.base_url, model_id=settings.model_id)
     source_reader = SQLiteGraphSourceReader(database)
+    source_document = source_reader.load(source.expanduser().resolve())
+    settings = load_llm_settings(os.environ)
+    language_model = OpenAICompatibleChatModel(
+        api_key=settings.api_key, base_url=settings.base_url, model_id=settings.model_id
+    )
     store = SQLiteKnowledgeGraphStore(graph_database)
-    service = GraphBuildService(source_reader, LLMKnowledgeGraphExtractor(language_model), store)
-    result = service.build(source)
+    service = GraphBuildService(
+        source_reader, LLMKnowledgeGraphExtractor(language_model), store
+    )
+    result = service.build_document(source_document)
     print(f"Built graph for {result.source}")
     print(f"Chunks processed: {result.chunks}")
     print(f"Entities contributed: {result.entities}")
@@ -750,30 +792,63 @@ def _graph_build(source: Path, database: Path, graph_database: Path) -> None:
 
 
 def _graph_search(query: str, limit: int, graph_database: Path) -> None:
-    service = GraphQueryService(SQLiteKnowledgeGraphStore(graph_database))
+    service = GraphQueryService(
+        SQLiteKnowledgeGraphStore(graph_database, create_if_missing=False)
+    )
     results = service.search(query, limit=limit)
     if not results:
         print("No graph entities found.")
         return
     for result in results:
-        print(f"[{result.entity_id}] {result.entity_type.value} {result.display_name} score={result.score:.4f}")
+        print(
+            f"[{result.entity_id}] {result.entity_type.value} "
+            f"{result.display_name} score={result.score:.4f}"
+        )
+
+
+def _print_graph_neighbors(
+    heading: str,
+    neighbors: Sequence[GraphNeighbor],
+    *,
+    arrow: str,
+) -> None:
+    """Print one ordered direction of a graph neighborhood with evidence."""
+    if not neighbors:
+        return
+    print(heading)
+    for neighbor in neighbors:
+        relation_type = neighbor.relation_type.value
+        print(
+            f"{relation_type} {arrow} [{neighbor.entity_id}] "
+            f"{neighbor.entity_type.value} {neighbor.display_name}"
+        )
+        for evidence_index, provenance in enumerate(neighbor.provenance, start=1):
+            location = provenance.source
+            if provenance.heading_path:
+                location = f"{location} > {' > '.join(provenance.heading_path)}"
+            print(f"  [{evidence_index}] {location}")
+            print(f"      {provenance.evidence_quote}")
 
 
 def _graph_show(entity_id: str, graph_database: Path) -> None:
-    service = GraphQueryService(SQLiteKnowledgeGraphStore(graph_database))
+    service = GraphQueryService(
+        SQLiteKnowledgeGraphStore(graph_database, create_if_missing=False)
+    )
     neighborhood = service.show(entity_id)
-    print(f"Entity: {neighborhood.entity.display_name}")
-    print(f"  Type: {neighborhood.entity.entity_type.value}")
-    print(f"  ID: {neighborhood.entity.entity_id}")
+    print(
+        f"Entity: [{neighborhood.entity.entity_id}] "
+        f"{neighborhood.entity.entity_type.value} "
+        f"{neighborhood.entity.display_name}"
+    )
     if neighborhood.outgoing:
-        print("Outgoing:")
-        for n in neighborhood.outgoing:
-            print(f"  {n.relation_type.value} -> {n.display_name} [{n.entity_type.value}]")
+        print()
+        _print_graph_neighbors("Outgoing:", neighborhood.outgoing, arrow="->")
     if neighborhood.incoming:
-        print("Incoming:")
-        for n in neighborhood.incoming:
-            print(f"  {n.relation_type.value} <- {n.display_name} [{n.entity_type.value}]")
-
+        if neighborhood.outgoing:
+            print()
+        else:
+            print()
+        _print_graph_neighbors("Incoming:", neighborhood.incoming, arrow="<-")
 
 
 def main(arguments: Sequence[str] | None = None) -> None:

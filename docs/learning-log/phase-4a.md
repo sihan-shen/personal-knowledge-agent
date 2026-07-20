@@ -25,6 +25,10 @@ entity. But "LLM" and "Large Language Model" remain separate. This is a
 deliberate design choice: false duplicates are visible (two nodes with
 similar names), while false merges are invisible and irreversible.
 
+For example, `RAG` and `rag` with type `method` map to one identity, while
+`LLM` and `Large Language Model` remain separate nodes. 中文名称也经过 Unicode
+normalization and whitespace normalization, rather than semantic embedding merge.
+
 ### Relation direction and symmetric canonicalization
 `related_to` is symmetric; the relation ID is computed by sorting the two
 endpoint entity IDs before hashing, so reversing the endpoints produces the
@@ -65,7 +69,7 @@ computed over entity display and normalized names.
 
 ## Why SQLite is sufficient here
 One-hop neighborhood queries over a few thousand entities are trivially
-served by indexed SQLite. The `graph_edges` table stores each relation
-instance with its full provenance, and entity-lookup queries use primary-key
-scans. A dedicated graph database like Neo4j would add operational complexity
-without benefit at this scale.
+served by indexed SQLite. The `relations` table stores each stable relation and
+`relation_evidence` stores every document/chunk quote that supports it; entity lookup
+uses graph-specific BM25 postings. A dedicated graph database like Neo4j would add
+operational complexity without benefit at this scale.

@@ -76,11 +76,10 @@ gate before a feature is merged.
 - Phase 3A is complete: confirmation-gated long-term-memory proposals, explicit
   administration, lifecycle persistence, and active-only hybrid memory search.
 - Phase 3B is complete: conservative active-memory recall, separated untrusted
+  prompt context, strict `S`/`M` citations, safe degradation, and visible
+  request-local memory use.
 - Phase 4A is complete: controlled entity/relation extraction, strict structured
   validation, deterministic identity via `(type, NFKC-normalized name)`, cross-document
   shared entities, provenance-aware SQLite persistence, per-source atomic replacement,
   local BM25 entity search, one-hop neighborhood inspection, and `pka graph build|search|show`.
-  prompt context, strict `S`/`M` citations, safe degradation, and visible
-  request-local memory use.
-- PDF/web/code ingestion, knowledge graphs, evaluation, and deployment remain future
-  work.
+- PDF/web/code ingestion, evaluation, and deployment remain future work.

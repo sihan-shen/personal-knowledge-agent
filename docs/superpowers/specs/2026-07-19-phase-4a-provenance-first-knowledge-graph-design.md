@@ -505,7 +505,7 @@ Counts describe the rebuilt document contribution, not all globally shared rows.
 - the graph remains the last successfully built snapshot until the user rebuilds;
 - the stored document identity and content hash describe that snapshot;
 - Phase 4A provides no background task or status command for stale detection;
-- build output must explain that a later reingest requires another graph build;
+- README usage must explain that a later reingest requires another graph build;
 - graph query commands read their local provenance snapshot and do not reopen the
   knowledge database.
 

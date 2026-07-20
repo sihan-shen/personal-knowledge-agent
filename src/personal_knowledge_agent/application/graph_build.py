@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from personal_knowledge_agent.domain.graph import GraphBuildResult
+from personal_knowledge_agent.domain.errors import InvalidGraphError
+from personal_knowledge_agent.domain.graph import (
+    GraphBuildResult,
+    GraphChunkExtraction,
+    GraphSourceDocument,
+)
 from personal_knowledge_agent.domain.protocols import (
     GraphSourceReader,
     KnowledgeGraphExtractor,
@@ -31,11 +36,19 @@ class GraphBuildService:
         Loads the indexed source, extracts entities and relations per chunk,
         and atomically replaces the document's graph contribution.
         """
-        source_document = self._source_reader.load(source)
+        source_document = self._source_reader.load(source.expanduser().resolve())
+        return self.build_document(source_document)
 
-        extractions = []
+    def build_document(self, source_document: GraphSourceDocument) -> GraphBuildResult:
+        """Build from a source document that has already been loaded safely."""
+
+        extractions: list[GraphChunkExtraction] = []
         for chunk in source_document.chunks:
             extraction = self._extractor.extract(chunk)
+            if extraction.chunk != chunk:
+                raise InvalidGraphError(
+                    "Graph extractor returned facts for a different chunk"
+                )
             extractions.append(extraction)
 
-        return self._store.replace_document(source_document, extractions)
+        return self._store.replace_document(source_document, tuple(extractions))

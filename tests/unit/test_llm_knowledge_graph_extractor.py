@@ -6,12 +6,6 @@ from personal_knowledge_agent.domain.errors import (
     InvalidGraphSchemaError,
     LanguageModelError,
 )
-from personal_knowledge_agent.domain.graph import (
-    EntityType,
-    GraphChunkExtraction,
-    GraphEntity,
-    make_entity_id,
-)
 from personal_knowledge_agent.domain.models import Chunk, ModelOutput
 from personal_knowledge_agent.infrastructure.llm_knowledge_graph_extractor import (
     LLMKnowledgeGraphExtractor,
