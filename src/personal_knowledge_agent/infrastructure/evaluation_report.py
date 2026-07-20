@@ -64,6 +64,7 @@ def write_report(report: EvaluationReport, output: Path) -> None:
     """Atomically write a stable evaluation report to ``output``."""
     temporary_path: Path | None = None
     try:
+        output.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",

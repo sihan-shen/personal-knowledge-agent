@@ -11,8 +11,6 @@ from typing import Final
 
 from personal_knowledge_agent.domain.models import AnswerStatus, SearchMode
 
-_LANGUAGES: Final[frozenset[EvaluationLanguage]]
-
 
 def _require_text(value: str, field_name: str) -> None:
     if not value.strip():
@@ -31,7 +29,7 @@ class EvaluationLanguage(StrEnum):
     ZH = "zh"
 
 
-_LANGUAGES = frozenset(EvaluationLanguage)
+_LANGUAGES: Final[frozenset[EvaluationLanguage]] = frozenset(EvaluationLanguage)
 
 
 @dataclass(frozen=True, slots=True)

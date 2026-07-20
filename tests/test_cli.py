@@ -45,7 +45,12 @@ from personal_knowledge_agent.domain.memory import (
     MemoryType,
     memory_source_hash,
 )
-from personal_knowledge_agent.domain.models import Chunk, MessageRole, ModelOutput
+from personal_knowledge_agent.domain.models import (
+    Chunk,
+    MessageRole,
+    ModelOutput,
+    SearchMode,
+)
 from personal_knowledge_agent.domain.protocols import LanguageModel
 from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import (
     SQLiteKnowledgeGraphStore,
@@ -1321,6 +1326,31 @@ def test_evaluate_parser_accepts_each_search_mode(mode: str) -> None:
     parsed = build_parser().parse_args(["evaluate", "--mode", mode])
 
     assert parsed.mode == mode
+
+
+@pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
+def test_evaluate_passes_each_search_mode_to_evaluation_service(mode: str) -> None:
+    with patch(
+        "personal_knowledge_agent.cli.EvaluationService.run",
+        side_effect=EvaluationStorageError("stop after verifying mode"),
+    ) as run:
+        result = run_cli("evaluate", "--mode", mode)
+
+    assert result.returncode == 1
+    run.assert_called_once_with(mode=SearchMode(mode), limit=5)
+
+
+def test_evaluate_creates_default_report_parent_in_a_clean_project(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = run_cli("evaluate", language_model=scripted_24_case_model())
+
+    output = tmp_path / ".pka/reports/xquad-mini-v1.json"
+    assert result.returncode == 0
+    assert output.is_file()
+    assert f"Report: {Path('.pka/reports/xquad-mini-v1.json')}" in result.stdout
 
 
 def test_evaluate_uses_a_private_database_and_writes_report(tmp_path: Path) -> None:
