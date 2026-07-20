@@ -115,3 +115,15 @@ class GraphStorageError(GraphFeatureError):
 
 class InvalidGraphSchemaError(GraphFeatureError):
     """Raised when graph extraction output violates the expected schema."""
+
+
+class EvaluationFeatureError(KnowledgeError):
+    """Base class for user-facing RAG evaluation errors."""
+
+
+class InvalidEvaluationError(EvaluationFeatureError):
+    """Raised when an evaluation input or result is invalid."""
+
+
+class EvaluationStorageError(EvaluationFeatureError):
+    """Raised when an evaluation artifact cannot be persisted safely."""
