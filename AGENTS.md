@@ -87,5 +87,9 @@ gate before a feature is merged.
 - Phase 5A is complete after the documented full quality gate: a reproducible,
   isolated bilingual XQuAD-mini document-RAG evaluation with deterministic local
   scoring and stable reports.
-- Broader evaluation (including Agent, memory, graph, PDF/web/code ingestion, and
-  deployment evaluation) remains future work.
+- Phase 5B is complete: opt-in OpenAI-compatible LLM Judge evaluation with strict
+  structured scores for relevance, evidence-only faithfulness, and reference-only
+  completeness; two isolated Judge calls per answered case; schema-v2 reports; and
+  fail-closed output behavior.
+- Broader evaluation (including Agent, memory, graph, refusal quality, PDF/web/code
+  ingestion, and deployment evaluation) remains future work.

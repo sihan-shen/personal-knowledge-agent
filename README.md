@@ -183,6 +183,29 @@ gold fixture document; they do not establish that a citation fully supports ever
 claim. Live generation can vary by model/provider even though the local fixture,
 ingestion, scoring, and report formatting are deterministic.
 
+### Judge semantic answer quality
+
+Add `--judge` to ask the configured LLM Judge to score answered cases for relevance,
+evidence faithfulness, and answer completeness:
+
+```bash
+uv run pka evaluate --mode hybrid --limit 5 --judge
+```
+
+The Judge uses `PKA_JUDGE_MODEL` when set, otherwise it falls back to
+`PKA_LLM_MODEL` and the same OpenAI-compatible provider configuration. A full
+24-case run makes up to 48 additional live model calls: one evidence-only
+faithfulness call and one reference-answer-only relevance/completeness call per
+answered case. Judge reports use schema version 2 and record the non-secret Judge
+model ID and prompt versions; no-flag reports remain schema version 1.
+
+Judge scores complement rather than replace the deterministic Phase 5A metrics.
+They can recognize useful paraphrases, but may vary by model and can inherit a
+model's preferences or bias. Any Judge transport or structured-output failure stops
+the command and writes no report, rather than creating a partial or misleading score.
+This evaluation still does not assess Agent routing, Memory, Graph answers, or the
+quality of a refusal.
+
 ## Let the Agent choose whether to retrieve
 
 Use `agent` when you want the routing decision to be part of the workflow:
