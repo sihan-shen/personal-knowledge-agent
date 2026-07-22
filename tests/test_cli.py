@@ -1424,6 +1424,8 @@ def test_evaluate_judge_writes_schema_v2_and_prints_judge_summary(
     assert "Judge relevance:" in result.stdout
     assert "Judge faithfulness:" in result.stdout
     assert "Judge completeness:" in result.stdout
+    assert "Faithfulness Judge prompt: faithfulness-judge-v1" in result.stdout
+    assert "Reference-quality Judge prompt: reference-quality-judge-v1" in result.stdout
     assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 2
 
 

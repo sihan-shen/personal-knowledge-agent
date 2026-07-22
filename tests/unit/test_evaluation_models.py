@@ -66,10 +66,12 @@ def test_case_is_immutable() -> None:
         item.question = "tampered"  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("score", [-1, 3])
-def test_judge_metric_score_rejects_scores_outside_zero_through_two(score: int) -> None:
+@pytest.mark.parametrize("score", [-1, 3, True, False, 0.0])
+def test_judge_metric_score_rejects_non_integer_or_out_of_range_scores(
+    score: object,
+) -> None:
     with pytest.raises(ValueError, match="score"):
-        JudgeMetricScore(JudgeMetric.FAITHFULNESS, score, "Supported.")
+        JudgeMetricScore(JudgeMetric.FAITHFULNESS, score, "Supported.")  # type: ignore[arg-type]
 
 
 def test_judge_metric_score_rejects_blank_or_overlong_reason() -> None:

@@ -127,7 +127,7 @@ class JudgeMetricScore:
     reason: str
 
     def __post_init__(self) -> None:
-        if self.score not in (0, 1, 2):
+        if type(self.score) is not int or self.score not in (0, 1, 2):
             raise ValueError("judge score must be 0, 1, or 2")
         _require_text(self.reason, "judge reason")
         if len(self.reason) > 200:

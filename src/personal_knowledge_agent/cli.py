@@ -708,10 +708,19 @@ def _evaluate(limit: int, mode: SearchMode, output: Path, judge: bool) -> None:
     print(f"English token F1: {_percent(english.answer_token_f1)}")
     print(f"Chinese token F1: {_percent(chinese.answer_token_f1)}")
     if report.judge_overall_summary is not None:
+        assert report.judge_configuration is not None
         judge_summary = report.judge_overall_summary
         print(f"Judge relevance: {_optional_percent(judge_summary.relevance)}")
         print(f"Judge faithfulness: {_optional_percent(judge_summary.faithfulness)}")
         print(f"Judge completeness: {_optional_percent(judge_summary.completeness)}")
+        print(
+            "Faithfulness Judge prompt: "
+            f"{report.judge_configuration.faithfulness_prompt_version}"
+        )
+        print(
+            "Reference-quality Judge prompt: "
+            f"{report.judge_configuration.reference_quality_prompt_version}"
+        )
     print(f"Report: {output}")
 
 
