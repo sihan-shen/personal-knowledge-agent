@@ -14,10 +14,13 @@ from unittest.mock import patch
 
 import pytest
 
+import personal_knowledge_agent.cli as cli_module
+from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.cli import build_parser, main
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
     EvaluationStorageError,
+    InvalidEvaluationError,
     InvalidMemoryError,
     LanguageModelError,
     MemoryConflictError,
@@ -52,12 +55,18 @@ from personal_knowledge_agent.domain.models import (
     SearchMode,
 )
 from personal_knowledge_agent.domain.protocols import LanguageModel
+from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
+from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
+    SQLiteKeywordIndex,
+)
 from personal_knowledge_agent.infrastructure.sqlite_knowledge_graph_store import (
     SQLiteKnowledgeGraphStore,
 )
 from personal_knowledge_agent.infrastructure.sqlite_memory_store import (
     SQLiteMemoryStore,
 )
+from personal_knowledge_agent.infrastructure.xquad_suite import XQuadMiniSuiteLoader
 from tests.helpers import (
     FakeEmbedder,
     FakeLanguageModel,
@@ -1400,6 +1409,114 @@ def test_evaluate_requires_llm_configuration_before_runtime_construction() -> No
     assert result.returncode == 1
     assert "PKA_LLM_API_KEY" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_evaluate_validates_fixture_before_resetting_database_or_runtime_construction(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "knowledge.db"
+    protected_files = {
+        database: b"existing evaluation database",
+        Path(f"{database}-wal"): b"existing wal",
+        Path(f"{database}-shm"): b"existing shm",
+    }
+    for path, content in protected_files.items():
+        path.write_bytes(content)
+
+    with (
+        patch(
+            "personal_knowledge_agent.cli._DEFAULT_EVALUATION_DATABASE",
+            database,
+        ),
+        patch(
+            "personal_knowledge_agent.cli.XQuadMiniSuiteLoader.load",
+            side_effect=InvalidEvaluationError("invalid fixture"),
+        ),
+    ):
+        result = run_cli(
+            "evaluate",
+            forbid_model_construction=True,
+            forbid_embedder_construction=True,
+        )
+
+    assert result.returncode == 1
+    assert result.stderr == "error: invalid fixture\n"
+    assert {path: path.read_bytes() for path in protected_files} == protected_files
+
+
+def test_evaluation_database_reset_removes_only_exact_database_and_sidecars(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "evaluations/xquad-mini-v1/knowledge.db"
+    database.parent.mkdir(parents=True)
+    reset_targets = (
+        database,
+        Path(f"{database}-wal"),
+        Path(f"{database}-shm"),
+    )
+    protected_databases = (
+        tmp_path / ".pka/knowledge.db",
+        tmp_path / ".pka/memory.db",
+        tmp_path / ".pka/graph.db",
+        database.with_name("knowledge.db.backup"),
+    )
+    for path in (*reset_targets, *protected_databases):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode("utf-8"))
+
+    with patch.object(cli_module, "_DEFAULT_EVALUATION_DATABASE", database):
+        cli_module._reset_evaluation_database()
+
+    assert not any(path.exists() for path in reset_targets)
+    assert all(
+        path.read_bytes() == path.name.encode("utf-8") for path in protected_databases
+    )
+
+
+def test_evaluate_rebuild_excludes_preexisting_outsider_from_index_and_evidence(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "evaluations/xquad-mini-v1/knowledge.db"
+    outsider = tmp_path / "outsider.md"
+    corpus = XQuadMiniSuiteLoader().load()
+    outsider_marker = "OUTSIDER-MUST-NOT-BE-EVIDENCE"
+    outsider.write_text(
+        "# Outsider\n\n"
+        + outsider_marker
+        + "\n"
+        + " ".join(case.question for case in corpus.suite.cases) * 3,
+        encoding="utf-8",
+    )
+    stale_index = SQLiteKeywordIndex(
+        database,
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    )
+    IngestService(MarkdownLoader(), MarkdownChunker(), stale_index).ingest(outsider)
+    model = scripted_24_case_model()
+    output = tmp_path / "report.json"
+
+    with patch.object(cli_module, "_DEFAULT_EVALUATION_DATABASE", database):
+        result = run_cli(
+            "evaluate",
+            "--mode",
+            "lexical",
+            "--output",
+            str(output),
+            language_model=model,
+        )
+
+    assert result.returncode == 0
+    with sqlite3.connect(database) as connection:
+        indexed_sources = {
+            str(row[0]) for row in connection.execute("SELECT source FROM documents")
+        }
+    fixture_sources = {str(path.resolve()) for path in corpus.document_paths.values()}
+    assert indexed_sources == fixture_sources
+    supplied_prompt_text = "\n".join(
+        message.content for call in model.calls for message in call
+    )
+    assert outsider_marker not in supplied_prompt_text
+    assert str(outsider.resolve()) not in supplied_prompt_text
 
 
 def test_evaluate_does_not_write_report_when_model_fails(tmp_path: Path) -> None:

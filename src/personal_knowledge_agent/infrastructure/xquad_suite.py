@@ -46,7 +46,7 @@ _CHINESE_SHA256: Final[str] = (
     "691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835"
 )
 _CORPUS_SHA256: Final[str] = (
-    "4cfa30a46d8c3a065f298fda2d41018df2902dfccba1c78532d6b628f3a34d43"
+    "c255777a49cee10455ec20fa58046df9b325ea41f0dbafff146e10b630ec9ccb"
 )
 _LICENSE_SHA256: Final[str] = (
     "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
@@ -298,6 +298,18 @@ def _validate_alignment(
         EvaluationLanguage.ZH: 12,
     }:
         raise _invalid("cases must contain exactly 12 English and 12 Chinese entries")
+
+    for language, label in (
+        (EvaluationLanguage.EN, "English"),
+        (EvaluationLanguage.ZH, "Chinese"),
+    ):
+        language_contexts = tuple(
+            contexts[case.gold_document_id]
+            for case in cases
+            if case.language is language
+        )
+        if len(set(language_contexts)) != len(language_contexts):
+            raise _invalid(f"documents contain duplicate {label} context text")
 
     for pair_index in range(0, 24, 2):
         english, chinese = cases[pair_index : pair_index + 2]

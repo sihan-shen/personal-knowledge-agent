@@ -14,7 +14,7 @@
 - Use complete annotations, frozen slotted dataclasses, and strict mypy-compatible code.
 - Add no runtime dependency, framework, RAGAS, pandas, or LLM judge.
 - Reuse AnswerService, IngestService, MarkdownLoader, MarkdownChunker, SQLiteKeywordIndex, E5Embedder, and the existing OpenAI-compatible adapter.
-- The command only uses .pka/evaluations/xquad-mini-v1/knowledge.db. It never reads or writes user knowledge, memory, or graph databases.
+- After fixture validation, the command deletes only `.pka/evaluations/xquad-mini-v1/knowledge.db` and its exact `-wal`/`-shm` sidecars, then rebuilds it before constructing the model runtime. It never reads or writes user knowledge, memory, or graph databases.
 - Default reports stay under .pka/reports/; generated database/report artifacts are untracked.
 - Tests use packaged fixtures plus deterministic fakes and never make a network request.
 - Prefix project commands with TMPDIR=/tmp UV_LINK_MODE=copy UV_CACHE_DIR=/tmp/uv-cache.
@@ -294,7 +294,7 @@ def test_xquad_mini_loads_a_balanced_bilingual_public_corpus() -> None:
     assert len(corpus.document_paths) == 24
 ~~~
 
-Also assert order/IDs/aliases, complete attribution, all paths are files, every gold document exists, malformed JSON rejects, and each Markdown file is one title plus one context.
+Also assert order/IDs/aliases, complete attribution, all paths are files, every gold document exists, same-language contexts are unique, malformed JSON rejects, and each Markdown file is one title plus one context. Ingest the packaged corpus into a real lexical index with a deterministic fake embedder and require every question's gold source within the top five results.
 
 - [ ] **Step 2: Verify failure**
 
@@ -308,7 +308,7 @@ Expected: FAIL because loader/resources do not exist.
 
 - [ ] **Step 3: Derive and package deterministic fixture data**
 
-Download pinned xquad.en.json and xquad.zh.json to /tmp from the exact upstream revision recorded in ATTRIBUTION.md; never commit the full upstream files. Traverse English questions in original order. Retain an ID only when Chinese has the same ID, both answer arrays are non-empty, and each primary answer occurs in its language context. Stop at 12 IDs.
+Download pinned xquad.en.json and xquad.zh.json to /tmp from the exact upstream revision recorded in ATTRIBUTION.md; never commit the full upstream files. Traverse English questions in original order. Retain an ID only when Chinese has the same ID, both answer arrays are non-empty, each primary answer occurs in its language context, and neither language-specific context was retained earlier. Stop at 12 distinct aligned context pairs, with one QA pair per paragraph.
 
 For each retained ID/language create a document containing exactly:
 
@@ -444,7 +444,7 @@ _DEFAULT_EVALUATION_DATABASE = Path(".pka/evaluations/xquad-mini-v1/knowledge.db
 _DEFAULT_EVALUATION_REPORT = Path(".pka/reports/xquad-mini-v1.json")
 ~~~
 
-The parser uses existing _answer_limit and SearchMode choices. It has --output but no --db. _evaluate loads settings before provider construction, builds exactly one E5Embedder, SQLiteKeywordIndex on _DEFAULT_EVALUATION_DATABASE, IngestService, AnswerService, XQuadMiniSuiteLoader, and EvaluationService. It writes after a successful run and prints suite/version/case count, four overall percentages, English and Chinese token F1, and requested report path. Dispatch from main and rely on the existing KnowledgeError safe exit. Do not print source paths, fixture text, credentials, or raw provider detail.
+The parser uses existing `_answer_limit` and `SearchMode` choices. It has `--output` but no `--db`. `_evaluate` loads and validates `XQuadMiniSuiteLoader` before deleting the exact private database plus its `-wal`/`-shm` sidecars and before constructing E5 or provider runtime. It then builds exactly one E5Embedder, SQLiteKeywordIndex on `_DEFAULT_EVALUATION_DATABASE`, IngestService, AnswerService, and EvaluationService over the preloaded corpus. It writes after a successful run and prints suite/version/case count, four overall percentages, English and Chinese token F1, and requested report path. Dispatch from main and rely on the existing `KnowledgeError` safe exit. Do not print source paths, fixture text, credentials, or raw provider detail.
 
 - [ ] **Step 4: Verify pass**
 

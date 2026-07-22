@@ -10,13 +10,13 @@ XQuAD-mini-v1 is a derivative fixture made from the official XQuAD (Cross-lingua
 - English SHA-256: `e4c57d1c9143aaa1c5d265ba5987a65f4e69528d2a98f29d6e75019b10344f29`
 - Chinese source: https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.zh.json
 - Chinese SHA-256: `691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835`
-- Packaged `cases.json` plus 24 documents aggregate SHA-256: `4cfa30a46d8c3a065f298fda2d41018df2902dfccba1c78532d6b628f3a34d43`
+- Packaged `cases.json` plus 24 documents aggregate SHA-256: `c255777a49cee10455ec20fa58046df9b325ea41f0dbafff146e10b630ec9ccb`
 
 The revision and both SHA-256 values are fixed so the derivative can be reproduced from the exact source bytes.
 
 ## Derivative fixture notice
 
-This repository does not redistribute the full XQuAD corpus. It packages only the first 12 aligned English/Chinese question IDs that satisfy the documented deterministic selection rule, yielding 24 cases and 24 language-specific context documents. The transformation selects a subset, deduplicates answer aliases in original order, adds a logical-ID Markdown title to each unchanged context, duplicates a context when several selected questions share it, and reshapes question metadata into `cases.json`. No answer annotation is included in a Markdown document.
+This repository does not redistribute the full XQuAD corpus. It packages the first eligible question from each of the first 12 distinct aligned English/Chinese context pairs encountered in English source order, yielding 24 cases and 24 language-specific context documents. The transformation selects a subset, deduplicates answer aliases in original order, adds a logical-ID Markdown title to each unchanged context, and reshapes question metadata into `cases.json`. No answer annotation is included in a Markdown document.
 
 ## Citation
 

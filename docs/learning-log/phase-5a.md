@@ -4,7 +4,8 @@
 
 Phase 5A adds `pka evaluate`, a reproducible evaluation of the existing
 document-RAG answer path. The packaged `xquad-mini v1` suite contains 24 aligned
-English and Chinese cases derived from XQuAD. Each case supplies a question,
+English and Chinese cases derived from 12 distinct context-paragraph pairs in XQuAD,
+with one QA pair per paragraph. Each case supplies a question,
 one-or-more gold extractive answers, a language label, and exactly one gold fixture
 document ID. The fixture's attribution file pins the upstream source revision and
 checksums, which makes its origin and reproduction conditions inspectable.
@@ -18,11 +19,17 @@ Its packaged data, fixed case ordering, deterministic corpus ingestion, local me
 functions, and stable JSON serialization make a rerun comparable when the same
 answer outputs are supplied.
 
-The command rebuilds `.pka/evaluations/xquad-mini-v1/knowledge.db` from only the
-public fixture and writes its report separately, by default to
-`.pka/reports/xquad-mini-v1.json`. It has no `--db` option. This separation prevents
-private knowledge-base documents from entering an evaluation case and avoids changing
-the user's `.pka/knowledge.db` while measuring the suite.
+The command validates the public fixture before deleting only
+`.pka/evaluations/xquad-mini-v1/knowledge.db` and its exact SQLite sidecars, then
+rebuilds that index from the preloaded fixture before model-runtime construction. It
+writes its report separately, by default to `.pka/reports/xquad-mini-v1.json`, and has
+no `--db` option. This clean rebuild prevents stale or outsider documents from entering
+evaluation evidence without reading or changing user knowledge, memory, or graph data.
+
+Distinct same-language contexts make each gold document an identifiable retrieval
+target instead of twelve copies competing under different IDs. A real lexical-index
+sanity test requires every question's gold document in the top five results, proving
+that citation recall can measure retriever behavior rather than fixture ambiguity.
 
 ## EM and extractive token F1
 

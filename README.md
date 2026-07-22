@@ -162,11 +162,13 @@ uv run pka evaluate \
   --output .pka/reports/xquad-mini-v1.json
 ```
 
-The command rebuilds its fixture index at
-`.pka/evaluations/xquad-mini-v1/knowledge.db` and writes the requested JSON report
+The command validates the fixture, deletes only its exact database and SQLite
+sidecars at `.pka/evaluations/xquad-mini-v1/knowledge.db{,-wal,-shm}`, then rebuilds
+that index before constructing the model runtime. It writes the requested JSON report
 to `.pka/reports/xquad-mini-v1.json`. It deliberately has no `--db` option: it never
-reads or modifies the private `.pka/knowledge.db` knowledge base. The packaged
-24-case English/Chinese `xquad-mini v1` fixture is a CC BY-SA 4.0 derivative of
+reads or modifies the private knowledge, memory, or graph databases. The packaged
+24-case English/Chinese `xquad-mini v1` fixture selects one aligned QA pair from each
+of 12 distinct context pairs and is a CC BY-SA 4.0 derivative of
 [XQuAD](src/personal_knowledge_agent/evaluation_suites/xquad_mini/ATTRIBUTION.md);
 the attribution records the pinned upstream revision and integrity checks.
 

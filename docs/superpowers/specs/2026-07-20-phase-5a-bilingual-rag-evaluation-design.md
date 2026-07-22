@@ -44,11 +44,12 @@ license text will accompany the derived fixture.
 
 ### `xquad-mini-v1`
 
-The repository contains 12 aligned XQuAD question IDs in both English and
-Chinese, producing 24 evaluation cases and 24 language-specific Markdown
-documents. A selected English question and its selected Chinese counterpart have
-the same upstream question ID, but each points to its own translated document and
-answer aliases.
+The repository contains one aligned XQuAD question ID from each of 12 distinct
+English/Chinese context-paragraph pairs, producing 24 evaluation cases and 24
+language-specific Markdown documents. A selected English question and its selected
+Chinese counterpart have the same upstream question ID, but each points to its own
+translated document and answer aliases. Context text is unique within each language,
+so every gold document represents a distinct retrieval target.
 
 Selection is deterministic:
 
@@ -57,7 +58,9 @@ Selection is deterministic:
 3. Retain a question only when the Chinese file has the same question ID, both
    answer arrays are non-empty, and every retained primary answer is a substring
    of its language-specific context.
-4. Stop after 12 retained IDs.
+4. Skip a question when either its English or Chinese context has already been
+   retained, leaving at most one QA pair per aligned paragraph.
+5. Stop after 12 retained distinct context pairs.
 
 The implementation commits the resulting derived Markdown documents and a
 `cases.json` manifest. Tests only use those committed files; they do not download
@@ -100,12 +103,13 @@ uv run pka evaluate \
 `--limit` uses the existing answer limit validation of 1 through 10 and defaults
 to 5. `--output` defaults to `.pka/reports/xquad-mini-v1.json`.
 
-There is deliberately no `--db` option. Each invocation ingests the packaged
-fixture documents into the private database
-`.pka/evaluations/xquad-mini-v1/knowledge.db`, then uses that index for every
-case. Re-ingestion replaces each fixture document through the current atomic
-index boundary, so no user document can become evidence and no stale fixture
-chunk survives a fixture update.
+There is deliberately no `--db` option. Each invocation first validates and loads
+the packaged fixture. It then deletes only the private
+`.pka/evaluations/xquad-mini-v1/knowledge.db` file and that exact SQLite database's
+`-wal` and `-shm` sidecars before constructing the embedder, index, or provider. The
+command ingests the preloaded fixture into the fresh index and uses it for every case.
+User knowledge, memory, and graph databases are never reset or opened, and no
+undeclared or stale document can become evaluation evidence.
 
 ```text
 packaged xquad-mini-v1 suite
@@ -152,7 +156,10 @@ application-layer `EvaluationCorpusLoader` and returns its `EvaluationCorpus`,
 which pairs the pure `EvaluationSuite` with resolved local fixture paths. It
 validates the manifest before any model or index is
 constructed: 24 cases, 12 of each language, unique case IDs, unique document IDs,
-every gold document present, non-empty answer aliases, and complete attribution.
+unique same-language context text, every gold document present, non-empty answer
+aliases, and complete attribution. A real lexical-retrieval regression test also
+requires every question's gold document to appear within the top-five evidence
+boundary.
 
 `application/evaluate.py` owns the filesystem-aware `EvaluationCorpus`/
 `EvaluationCorpusLoader` boundary and orchestration. It accepts the existing ingestion

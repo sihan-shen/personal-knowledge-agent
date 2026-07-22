@@ -11,7 +11,10 @@ from pathlib import Path
 
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
-from personal_knowledge_agent.application.evaluate import EvaluationService
+from personal_knowledge_agent.application.evaluate import (
+    EvaluationCorpus,
+    EvaluationService,
+)
 from personal_knowledge_agent.application.graph_answer import GraphAnswerService
 from personal_knowledge_agent.application.graph_build import GraphBuildService
 from personal_knowledge_agent.application.graph_query import GraphQueryService
@@ -25,6 +28,7 @@ from personal_knowledge_agent.application.memory_recall import MemoryRecallServi
 from personal_knowledge_agent.application.search import SearchService
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
+    EvaluationStorageError,
     KnowledgeError,
     MemoryConflictError,
     MemoryStorageError,
@@ -131,6 +135,17 @@ class _UnavailableMemoryRecaller:
     def recall(self, query: str, *, limit: int = 3) -> MemoryRecallReport:
         del query, limit
         return MemoryRecallReport((), (self._warning,))
+
+
+class _LoadedEvaluationCorpusLoader:
+    """Return one corpus that was validated before runtime construction."""
+
+    def __init__(self, corpus: EvaluationCorpus) -> None:
+        self._corpus = corpus
+
+    def load(self) -> EvaluationCorpus:
+        """Return the already validated evaluation corpus."""
+        return self._corpus
 
 
 def _search_limit(value: str) -> int:
@@ -613,8 +628,22 @@ def _percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _reset_evaluation_database() -> None:
+    database = _DEFAULT_EVALUATION_DATABASE
+    targets = (database, Path(f"{database}-wal"), Path(f"{database}-shm"))
+    try:
+        for target in targets:
+            target.unlink(missing_ok=True)
+    except OSError as error:
+        raise EvaluationStorageError(
+            "Could not reset private evaluation database"
+        ) from error
+
+
 def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
     settings = load_llm_settings(os.environ)
+    corpus = XQuadMiniSuiteLoader().load()
+    _reset_evaluation_database()
     embedder = E5Embedder()
     index = SQLiteKeywordIndex(_DEFAULT_EVALUATION_DATABASE, embedder)
     language_model = OpenAICompatibleChatModel(
@@ -623,7 +652,7 @@ def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
         model_id=settings.model_id,
     )
     service = EvaluationService(
-        XQuadMiniSuiteLoader(),
+        _LoadedEvaluationCorpusLoader(corpus),
         IngestService(MarkdownLoader(), MarkdownChunker(), index),
         AnswerService(SearchService(index), language_model),
     )
