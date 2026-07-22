@@ -6,18 +6,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+from personal_knowledge_agent.domain.evaluation import (
+    FaithfulnessJudgeRequest,
+    JudgeMetricScore,
+    ReferenceQualityJudgeRequest,
+    ReferenceQualityScores,
+)
 from personal_knowledge_agent.domain.graph import (
     EntityNeighborhood,
     EntitySearchResult,
     GraphBuildResult,
     GraphChunkExtraction,
     GraphSourceDocument,
-)
-from personal_knowledge_agent.domain.evaluation import (
-    FaithfulnessJudgeRequest,
-    JudgeMetricScore,
-    ReferenceQualityJudgeRequest,
-    ReferenceQualityScores,
 )
 from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
