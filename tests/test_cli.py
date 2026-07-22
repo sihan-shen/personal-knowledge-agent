@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -85,6 +86,7 @@ class CliResult:
 def run_cli(
     *arguments: str,
     language_model: LanguageModel | None = None,
+    judge_model: LanguageModel | None = None,
     embedder: FakeEmbedder | None = None,
     environment: dict[str, str] | None = None,
     forbid_model_construction: bool = False,
@@ -110,6 +112,15 @@ def run_cli(
             "stop",
         )
     )
+    models = [model] if judge_model is None else [model, judge_model]
+
+    def create_model(*_: object, **__: object) -> LanguageModel:
+        if forbid_model_construction:
+            raise AssertionError("model construction must not run")
+        if models:
+            return models.pop(0)
+        return model
+
     settings = {"PKA_LLM_API_KEY": "test-key"} if environment is None else environment
     with (
         patch(
@@ -123,12 +134,7 @@ def run_cli(
         ),
         patch(
             "personal_knowledge_agent.cli.OpenAICompatibleChatModel",
-            return_value=model,
-            side_effect=(
-                AssertionError("model construction must not run")
-                if forbid_model_construction
-                else None
-            ),
+            side_effect=create_model,
         ),
         patch.dict(os.environ, settings, clear=True),
         redirect_stdout(stdout),
@@ -1321,12 +1327,28 @@ def scripted_24_case_model() -> ScriptedLanguageModel:
     return ScriptedLanguageModel((output,) * 24)
 
 
+def scripted_24_case_judge() -> ScriptedLanguageModel:
+    faithfulness = ModelOutput(
+        "fake-judge-model",
+        '{"faithfulness":{"score":2,"reason":"Supported."}}',
+        "stop",
+    )
+    quality = ModelOutput(
+        "fake-judge-model",
+        '{"relevance":{"score":2,"reason":"Direct."},'
+        '"completeness":{"score":2,"reason":"Complete."}}',
+        "stop",
+    )
+    return ScriptedLanguageModel((faithfulness, quality) * 24)
+
+
 def test_evaluate_parser_uses_private_defaults_without_database_option() -> None:
     parsed = build_parser().parse_args(["evaluate"])
 
     assert parsed.limit == 5
     assert parsed.mode == "hybrid"
     assert parsed.output == Path(".pka/reports/xquad-mini-v1.json")
+    assert parsed.judge is False
     assert not hasattr(parsed, "db")
 
 
@@ -1382,6 +1404,44 @@ def test_evaluation_summary_matches_the_documented_contract(tmp_path: Path) -> N
     assert "Chinese token F1:" in result.stdout
     assert f"Report: {output}" in result.stdout
     assert output.is_file()
+
+
+def test_evaluate_judge_writes_schema_v2_and_prints_judge_summary(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "report.json"
+
+    result = run_cli(
+        "evaluate",
+        "--judge",
+        "--output",
+        str(output),
+        language_model=scripted_24_case_model(),
+        judge_model=scripted_24_case_judge(),
+    )
+
+    assert result.returncode == 0
+    assert "Judge relevance:" in result.stdout
+    assert "Judge faithfulness:" in result.stdout
+    assert "Judge completeness:" in result.stdout
+    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_evaluate_judge_failure_does_not_write_report(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+
+    result = run_cli(
+        "evaluate",
+        "--judge",
+        "--output",
+        str(output),
+        language_model=scripted_24_case_model(),
+        judge_model=FakeLanguageModel(LanguageModelError("judge unavailable")),
+    )
+
+    assert result.returncode == 1
+    assert not output.exists()
+    assert result.stderr == "error: judge unavailable\n"
 
 
 @pytest.mark.parametrize("limit", ["0", "11"])

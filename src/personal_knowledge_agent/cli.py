@@ -33,7 +33,10 @@ from personal_knowledge_agent.domain.errors import (
     MemoryConflictError,
     MemoryStorageError,
 )
-from personal_knowledge_agent.domain.evaluation import EvaluationLanguage
+from personal_knowledge_agent.domain.evaluation import (
+    EvaluationLanguage,
+    JudgeConfiguration,
+)
 from personal_knowledge_agent.domain.graph import GraphNeighbor
 from personal_knowledge_agent.domain.graph_answer import GraphGroundedAnswer
 from personal_knowledge_agent.domain.memory import (
@@ -59,6 +62,10 @@ from personal_knowledge_agent.domain.models import (
     SearchResult,
 )
 from personal_knowledge_agent.domain.protocols import MemoryRecaller
+from personal_knowledge_agent.infrastructure.answer_judge_prompt_builder import (
+    FAITHFULNESS_PROMPT_VERSION,
+    REFERENCE_QUALITY_PROMPT_VERSION,
+)
 from personal_knowledge_agent.infrastructure.e5_embedder import E5Embedder
 from personal_knowledge_agent.infrastructure.evaluation_report import write_report
 from personal_knowledge_agent.infrastructure.hybrid_question_router import (
@@ -70,7 +77,10 @@ from personal_knowledge_agent.infrastructure.llm_knowledge_graph_extractor impor
 from personal_knowledge_agent.infrastructure.llm_memory_extractor import (
     LLMMemoryExtractor,
 )
-from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
+from personal_knowledge_agent.infrastructure.llm_settings import (
+    load_judge_llm_settings,
+    load_llm_settings,
+)
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.memory_prefilter import (
@@ -81,6 +91,9 @@ from personal_knowledge_agent.infrastructure.memory_relevance import (
 )
 from personal_knowledge_agent.infrastructure.memory_safety import (
     LocalMemorySafetyPolicy,
+)
+from personal_knowledge_agent.infrastructure.openai_compatible_answer_judge import (
+    OpenAICompatibleAnswerJudge,
 )
 from personal_knowledge_agent.infrastructure.openai_compatible_chat_model import (
     OpenAICompatibleChatModel,
@@ -239,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=_DEFAULT_EVALUATION_REPORT,
+    )
+    evaluate_parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="Score answered cases with the configured LLM Judge.",
     )
 
     agent_parser = subparsers.add_parser(
@@ -640,8 +658,9 @@ def _reset_evaluation_database() -> None:
         ) from error
 
 
-def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
+def _evaluate(limit: int, mode: SearchMode, output: Path, judge: bool) -> None:
     settings = load_llm_settings(os.environ)
+    judge_settings = load_judge_llm_settings(os.environ) if judge else None
     corpus = XQuadMiniSuiteLoader().load()
     _reset_evaluation_database()
     embedder = E5Embedder()
@@ -651,10 +670,27 @@ def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
         base_url=settings.base_url,
         model_id=settings.model_id,
     )
+    answer_judge = None
+    judge_configuration = None
+    if judge_settings is not None:
+        judge_language_model = OpenAICompatibleChatModel(
+            api_key=judge_settings.api_key,
+            base_url=judge_settings.base_url,
+            model_id=judge_settings.model_id,
+        )
+        answer_judge = OpenAICompatibleAnswerJudge(judge_language_model)
+        judge_configuration = JudgeConfiguration(
+            judge_settings.model_id,
+            FAITHFULNESS_PROMPT_VERSION,
+            REFERENCE_QUALITY_PROMPT_VERSION,
+        )
     service = EvaluationService(
         _LoadedEvaluationCorpusLoader(corpus),
         IngestService(MarkdownLoader(), MarkdownChunker(), index),
         AnswerService(SearchService(index), language_model),
+        answer_judge,
+        answer_judge,
+        judge_configuration,
     )
     report = service.run(mode=mode, limit=limit)
     write_report(report, output)
@@ -671,7 +707,16 @@ def _evaluate(limit: int, mode: SearchMode, output: Path) -> None:
     print(f"Citation recall: {_percent(overall.citation_recall)}")
     print(f"English token F1: {_percent(english.answer_token_f1)}")
     print(f"Chinese token F1: {_percent(chinese.answer_token_f1)}")
+    if report.judge_overall_summary is not None:
+        judge_summary = report.judge_overall_summary
+        print(f"Judge relevance: {_optional_percent(judge_summary.relevance)}")
+        print(f"Judge faithfulness: {_optional_percent(judge_summary.faithfulness)}")
+        print(f"Judge completeness: {_optional_percent(judge_summary.completeness)}")
     print(f"Report: {output}")
+
+
+def _optional_percent(value: float | None) -> str:
+    return "n/a" if value is None else _percent(value)
 
 
 def _format_route(decision: RouteDecision) -> str:
@@ -1015,7 +1060,9 @@ def main(arguments: Sequence[str] | None = None) -> None:
         elif parsed.command == "ask":
             _ask(parsed.query, parsed.limit, SearchMode(parsed.mode), parsed.db)
         elif parsed.command == "evaluate":
-            _evaluate(parsed.limit, SearchMode(parsed.mode), parsed.output)
+            _evaluate(
+                parsed.limit, SearchMode(parsed.mode), parsed.output, parsed.judge
+            )
         elif parsed.command == "agent":
             _agent(
                 parsed.query,
