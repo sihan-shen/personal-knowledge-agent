@@ -11,6 +11,8 @@ from personal_knowledge_agent.domain.errors import InvalidEvaluationError
 from personal_knowledge_agent.domain.evaluation import (
     CaseMetrics,
     EvaluationCase,
+    JudgeEvaluation,
+    JudgeSummary,
     MetricSummary,
 )
 from personal_knowledge_agent.domain.models import AnswerStatus, GroundedAnswer
@@ -85,4 +87,18 @@ def summarize(metrics: tuple[CaseMetrics, ...]) -> MetricSummary:
         fsum(item.answer_token_f1 for item in metrics) / count,
         fsum(item.citation_precision for item in metrics) / count,
         fsum(item.citation_recall for item in metrics) / count,
+    )
+
+
+def summarize_judge(evaluations: tuple[JudgeEvaluation, ...]) -> JudgeSummary:
+    """Return normalized macro averages, including the no-answered-case outcome."""
+    if not evaluations:
+        return JudgeSummary(0, None, None, None)
+
+    count = len(evaluations)
+    return JudgeSummary(
+        count,
+        fsum(item.relevance.score / 2.0 for item in evaluations) / count,
+        fsum(item.faithfulness.score / 2.0 for item in evaluations) / count,
+        fsum(item.completeness.score / 2.0 for item in evaluations) / count,
     )

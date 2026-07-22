@@ -16,12 +16,25 @@ from personal_knowledge_agent.domain.evaluation import (
     EvaluationLanguage,
     EvaluationReport,
     EvaluationSuite,
+    FaithfulnessJudgeRequest,
+    JudgeConfiguration,
+    JudgeEvaluation,
+    ReferenceQualityJudgeRequest,
 )
-from personal_knowledge_agent.domain.models import GroundedAnswer, SearchMode
-from personal_knowledge_agent.domain.protocols import GroundedQuestionAnswerer
+from personal_knowledge_agent.domain.models import (
+    AnswerStatus,
+    GroundedAnswer,
+    SearchMode,
+)
+from personal_knowledge_agent.domain.protocols import (
+    FaithfulnessJudge,
+    GroundedQuestionAnswerer,
+    ReferenceQualityJudge,
+)
 from personal_knowledge_agent.infrastructure.evaluation_metrics import (
     score_case,
     summarize,
+    summarize_judge,
 )
 
 
@@ -59,10 +72,25 @@ class EvaluationService:
         corpus_loader: EvaluationCorpusLoader,
         ingester: IngestService,
         answerer: GroundedQuestionAnswerer,
+        faithfulness_judge: FaithfulnessJudge | None = None,
+        reference_quality_judge: ReferenceQualityJudge | None = None,
+        judge_configuration: JudgeConfiguration | None = None,
     ) -> None:
+        judge_dependencies = (
+            faithfulness_judge,
+            reference_quality_judge,
+            judge_configuration,
+        )
+        if any(value is not None for value in judge_dependencies) and any(
+            value is None for value in judge_dependencies
+        ):
+            raise ValueError("judge dependencies must be all present or all absent")
         self._corpus_loader = corpus_loader
         self._ingester = ingester
         self._answerer = answerer
+        self._faithfulness_judge = faithfulness_judge
+        self._reference_quality_judge = reference_quality_judge
+        self._judge_configuration = judge_configuration
 
     def run(
         self,
@@ -98,6 +126,27 @@ class EvaluationService:
             )
             for language in EvaluationLanguage
         }
+        judge_overall_summary = None
+        judge_language_summaries = None
+        if self._judge_configuration is not None:
+            judge_overall_summary = summarize_judge(
+                tuple(
+                    evaluation.judge
+                    for evaluation in evaluations
+                    if evaluation.judge is not None
+                )
+            )
+            judge_language_summaries = {
+                language: summarize_judge(
+                    tuple(
+                        evaluation.judge
+                        for evaluation in evaluations
+                        if evaluation.case.language is language
+                        and evaluation.judge is not None
+                    )
+                )
+                for language in EvaluationLanguage
+            }
         return EvaluationReport(
             corpus.suite.suite_id,
             corpus.suite.version,
@@ -106,6 +155,9 @@ class EvaluationService:
             evaluations,
             summarize(tuple(evaluation.metrics for evaluation in evaluations)),
             language_summaries,
+            self._judge_configuration,
+            judge_overall_summary,
+            judge_language_summaries,
         )
 
     def _evaluate_case(
@@ -117,12 +169,42 @@ class EvaluationService:
     ) -> CaseEvaluation:
         answer = self._answerer.answer(case.question, limit=limit, mode=mode)
         cited_document_ids = self._cited_document_ids(answer, source_document_ids)
+        judge = self._judge_case(case, answer)
         return CaseEvaluation(
             case,
             answer.status,
             answer.model_id,
             cited_document_ids,
             score_case(case, answer, cited_document_ids),
+            judge,
+        )
+
+    def _judge_case(
+        self,
+        case: EvaluationCase,
+        answer: GroundedAnswer,
+    ) -> JudgeEvaluation | None:
+        if (
+            self._judge_configuration is None
+            or answer.status is not AnswerStatus.ANSWERED
+        ):
+            return None
+        assert self._faithfulness_judge is not None
+        assert self._reference_quality_judge is not None
+        faithfulness = self._faithfulness_judge.judge_faithfulness(
+            FaithfulnessJudgeRequest(case.question, answer.answer, answer.evidence)
+        )
+        quality = self._reference_quality_judge.judge_reference_quality(
+            ReferenceQualityJudgeRequest(
+                case.question,
+                answer.answer,
+                case.reference_answers,
+            )
+        )
+        return JudgeEvaluation(
+            quality.relevance,
+            faithfulness,
+            quality.completeness,
         )
 
     @staticmethod
