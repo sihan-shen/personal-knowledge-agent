@@ -13,6 +13,12 @@ from personal_knowledge_agent.domain.graph import (
     GraphChunkExtraction,
     GraphSourceDocument,
 )
+from personal_knowledge_agent.domain.evaluation import (
+    FaithfulnessJudgeRequest,
+    JudgeMetricScore,
+    ReferenceQualityJudgeRequest,
+    ReferenceQualityScores,
+)
 from personal_knowledge_agent.domain.memory import (
     MemoryActivationAction,
     MemoryProposal,
@@ -150,6 +156,28 @@ class GroundedQuestionAnswerer(Protocol):
         mode: SearchMode = SearchMode.HYBRID,
     ) -> GroundedAnswer:
         """Return one validated document-grounded answer."""
+        ...
+
+
+class FaithfulnessJudge(Protocol):
+    """Score whether an answer is supported by supplied evidence only."""
+
+    def judge_faithfulness(
+        self,
+        request: FaithfulnessJudgeRequest,
+    ) -> JudgeMetricScore:
+        """Return one valid faithfulness score."""
+        ...
+
+
+class ReferenceQualityJudge(Protocol):
+    """Score relevance and completeness against supplied reference answers only."""
+
+    def judge_reference_quality(
+        self,
+        request: ReferenceQualityJudgeRequest,
+    ) -> ReferenceQualityScores:
+        """Return valid relevance and completeness scores."""
         ...
 
 

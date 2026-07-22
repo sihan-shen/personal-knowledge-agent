@@ -17,7 +17,12 @@ from personal_knowledge_agent.domain.evaluation import (
     EvaluationLanguage,
     EvaluationReport,
     EvaluationSuite,
+    FaithfulnessJudgeRequest,
+    JudgeEvaluation,
+    JudgeMetric,
+    JudgeMetricScore,
     MetricSummary,
+    ReferenceQualityScores,
 )
 from personal_knowledge_agent.domain.models import AnswerStatus, SearchMode
 
@@ -46,11 +51,45 @@ def summary() -> MetricSummary:
     return MetricSummary(1, 1.0, 1.0, 1.0, 1.0)
 
 
+def judge_evaluation() -> JudgeEvaluation:
+    return JudgeEvaluation(
+        JudgeMetricScore(JudgeMetric.RELEVANCE, 2, "Directly answers the question."),
+        JudgeMetricScore(JudgeMetric.FAITHFULNESS, 2, "Supported by the evidence."),
+        JudgeMetricScore(JudgeMetric.COMPLETENESS, 2, "Covers the reference answer."),
+    )
+
+
 def test_case_is_immutable() -> None:
     item = case()
 
     with pytest.raises(FrozenInstanceError):
         item.question = "tampered"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("score", [-1, 3])
+def test_judge_metric_score_rejects_scores_outside_zero_through_two(score: int) -> None:
+    with pytest.raises(ValueError, match="score"):
+        JudgeMetricScore(JudgeMetric.FAITHFULNESS, score, "Supported.")
+
+
+def test_judge_metric_score_rejects_blank_or_overlong_reason() -> None:
+    with pytest.raises(ValueError, match="reason"):
+        JudgeMetricScore(JudgeMetric.FAITHFULNESS, 2, "  ")
+    with pytest.raises(ValueError, match="200"):
+        JudgeMetricScore(JudgeMetric.FAITHFULNESS, 2, "x" * 201)
+
+
+def test_faithfulness_request_rejects_empty_evidence() -> None:
+    with pytest.raises(ValueError, match="evidence"):
+        FaithfulnessJudgeRequest("question", "answer", ())
+
+
+def test_reference_quality_scores_require_expected_metric_names() -> None:
+    with pytest.raises(ValueError, match="relevance"):
+        ReferenceQualityScores(
+            JudgeMetricScore(JudgeMetric.FAITHFULNESS, 2, "Supported."),
+            JudgeMetricScore(JudgeMetric.COMPLETENESS, 2, "Complete."),
+        )
 
 
 @pytest.mark.parametrize("field_name", ["case_id", "question", "gold_document_id"])
@@ -145,6 +184,18 @@ def test_case_evaluation_rejects_blank_cited_document_id() -> None:
             "fake-model",
             ("  ",),
             CaseMetrics(1.0, 1.0, 1.0, 1.0),
+        )
+
+
+def test_case_evaluation_rejects_judge_result_for_insufficient_evidence() -> None:
+    with pytest.raises(ValueError, match="judge"):
+        CaseEvaluation(
+            case(),
+            AnswerStatus.INSUFFICIENT_EVIDENCE,
+            None,
+            (),
+            CaseMetrics(0.0, 0.0, 0.0, 0.0),
+            judge_evaluation(),
         )
 
 

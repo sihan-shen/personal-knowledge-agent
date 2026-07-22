@@ -127,3 +127,7 @@ class InvalidEvaluationError(EvaluationFeatureError):
 
 class EvaluationStorageError(EvaluationFeatureError):
     """Raised when an evaluation artifact cannot be persisted safely."""
+
+
+class InvalidJudgeSchemaError(EvaluationFeatureError):
+    """Raised when LLM Judge output violates the expected JSON contract."""
