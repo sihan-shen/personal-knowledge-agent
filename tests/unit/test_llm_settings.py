@@ -3,7 +3,10 @@
 import pytest
 
 from personal_knowledge_agent.domain.errors import ConfigurationError
-from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
+from personal_knowledge_agent.infrastructure.llm_settings import (
+    load_judge_llm_settings,
+    load_llm_settings,
+)
 
 
 def test_settings_require_api_key_and_apply_deepseek_defaults() -> None:
@@ -28,6 +31,22 @@ def test_settings_preserve_non_blank_overrides_after_trimming() -> None:
     assert settings.model_id == "provider-model"
 
 
+def test_judge_settings_use_model_override_or_answer_model_fallback() -> None:
+    fallback = load_judge_llm_settings(
+        {"PKA_LLM_API_KEY": "key", "PKA_LLM_MODEL": "answer-model"}
+    )
+    override = load_judge_llm_settings(
+        {
+            "PKA_LLM_API_KEY": "key",
+            "PKA_LLM_MODEL": "answer-model",
+            "PKA_JUDGE_MODEL": " judge-model ",
+        }
+    )
+
+    assert fallback.model_id == "answer-model"
+    assert override.model_id == "judge-model"
+
+
 @pytest.mark.parametrize("value", [None, "", "   "])
 def test_settings_reject_missing_or_blank_api_key(value: str | None) -> None:
     environment = {} if value is None else {"PKA_LLM_API_KEY": value}
@@ -36,7 +55,11 @@ def test_settings_reject_missing_or_blank_api_key(value: str | None) -> None:
         load_llm_settings(environment)
 
 
-@pytest.mark.parametrize("name", ["PKA_LLM_BASE_URL", "PKA_LLM_MODEL"])
+@pytest.mark.parametrize(
+    "name", ["PKA_LLM_BASE_URL", "PKA_LLM_MODEL", "PKA_JUDGE_MODEL"]
+)
 def test_settings_reject_blank_optional_overrides(name: str) -> None:
+    loader = load_judge_llm_settings if name == "PKA_JUDGE_MODEL" else load_llm_settings
+
     with pytest.raises(ConfigurationError, match=name):
-        load_llm_settings({"PKA_LLM_API_KEY": "key", name: "   "})
+        loader({"PKA_LLM_API_KEY": "key", name: "   "})

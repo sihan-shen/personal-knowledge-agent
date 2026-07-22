@@ -36,6 +36,16 @@ def load_llm_settings(environment: Mapping[str, str]) -> LLMSettings:
     return LLMSettings(api_key, base_url, model_id)
 
 
+def load_judge_llm_settings(environment: Mapping[str, str]) -> LLMSettings:
+    """Load Judge settings, defaulting its model to the answer model."""
+    settings = load_llm_settings(environment)
+    return LLMSettings(
+        settings.api_key,
+        settings.base_url,
+        _optional_setting(environment, "PKA_JUDGE_MODEL", settings.model_id),
+    )
+
+
 def _required_setting(environment: Mapping[str, str], name: str) -> str:
     value = environment.get(name)
     if value is None or not value.strip():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 
 from personal_knowledge_agent.domain.evaluation import (
     FaithfulnessJudgeRequest,
@@ -74,5 +75,5 @@ def build_reference_quality_judge_messages(
     )
 
 
-def _serialize_payload(payload: dict[str, object]) -> str:
+def _serialize_payload(payload: Mapping[str, object]) -> str:
     return "EVALUATION_DATA_JSON:\n" + json.dumps(payload, ensure_ascii=False)
