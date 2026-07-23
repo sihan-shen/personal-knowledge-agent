@@ -144,6 +144,48 @@ git push
 uv run pka health
 ```
 
+## Run the local RAG API
+
+The local FastAPI server exposes the existing grounded `pka ask` flow as
+`GET /health` and `POST /ask`. It does not add Agent routing, memory, or graph
+answering. First create the small public demo knowledge base:
+
+```bash
+uv run pka ingest docs/demo-knowledge/retrieval.md --db .pka/demo-knowledge.db
+uv run pka ingest docs/demo-knowledge/grounded-answers.md --db .pka/demo-knowledge.db
+uv run pka ingest docs/demo-knowledge/prompt-engineering.md --db .pka/demo-knowledge.db
+```
+
+Configure an OpenAI-compatible provider in the current shell. The server does
+not load `.env` automatically, so keep API keys outside tracked files:
+
+```bash
+export PKA_LLM_API_KEY="your-key"
+export PKA_LLM_BASE_URL="https://api.deepseek.com"
+export PKA_LLM_MODEL="deepseek-v4-flash"
+```
+
+Run the server only on the loopback interface:
+
+```bash
+uv run uvicorn personal_knowledge_agent.api:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Open [the interactive API documentation](http://127.0.0.1:8000/docs), or ask a
+question from another terminal:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask \
+  -H 'content-type: application/json' \
+  -d '{"question":"What is hybrid retrieval?"}'
+```
+
+`/health` reports `status: "degraded"` until both an indexed database and model
+configuration are available; its `knowledge_base_ready` and `model_configured`
+fields show which prerequisite is missing. `/ask` returns a structured `503`
+response for a missing or unusable knowledge base, or for missing model
+configuration.
+
 ## Configure answer generation
 
 `pka ask` and `pka agent` require an API key in the shell. The defaults target

@@ -6,9 +6,11 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from personal_knowledge_agent.api import create_app
+from personal_knowledge_agent.application.ingest import IngestService
 from personal_knowledge_agent.domain.errors import LanguageModelError
 from personal_knowledge_agent.domain.models import (
     AnswerStatus,
@@ -16,6 +18,14 @@ from personal_knowledge_agent.domain.models import (
     GroundedAnswer,
     SearchMode,
 )
+from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
+from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
+    SQLiteKeywordIndex,
+)
+from tests.helpers import FakeEmbedder
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeAnswerer:
@@ -213,3 +223,19 @@ def test_ask_returns_502_for_a_provider_failure(tmp_path: Path) -> None:
 
     assert response.status_code == 502
     assert response.json() == {"detail": {"code": "model_request_failed"}}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["retrieval.md", "grounded-answers.md", "prompt-engineering.md"],
+)
+def test_demo_documents_can_be_ingested(filename: str, tmp_path: Path) -> None:
+    source = ROOT / "docs" / "demo-knowledge" / filename
+    index = SQLiteKeywordIndex(
+        tmp_path / "demo.db",
+        FakeEmbedder({}, default_vector=(1.0, 0.0)),
+    )
+
+    result = IngestService(MarkdownLoader(), MarkdownChunker(), index).ingest(source)
+
+    assert result.chunk_count >= 2
