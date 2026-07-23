@@ -80,7 +80,8 @@ reported.
 ## Static regression test
 
 Add dependency-free `tests/test_ci_workflow.py`, reading the controlled workflow text.
-It verifies PR/main triggers, `contents: read`, concurrency cancellation, SHA pins,
+It verifies PR/main triggers, `contents: read`, concurrency cancellation, that every
+`uses:` reference is a complete SHA-pinned member of the approved Action set,
 Python 3.12, uv 0.11.29, cache settings, locked installation, every quality command,
 `container` depending on `quality`, Buildx/GHA cache, Docker build/default run/health
 inspection, and absence of secrets, `.env`, `.pka/` mounts, registry login/push, and

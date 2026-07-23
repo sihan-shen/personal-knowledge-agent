@@ -14,7 +14,7 @@ APPROVED_ACTIONS = (
     "docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435",
     "docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83",
 )
-ACTION_REFERENCE = re.compile(r"^\s*-\s+uses:\s+([^\s#]+)", re.MULTILINE)
+ACTION_REFERENCE = re.compile(r"^\s*(?:-\s+)?uses:\s+([^\s#]+)", re.MULTILINE)
 
 
 def _workflow() -> str:
@@ -23,6 +23,12 @@ def _workflow() -> str:
 
 def _normalized_workflow() -> str:
     return " ".join(_workflow().split())
+
+
+def test_action_reference_matches_named_steps() -> None:
+    named_step = "      - name: Checkout\n        uses: actions/checkout@main\n"
+
+    assert ACTION_REFERENCE.findall(named_step) == ["actions/checkout@main"]
 
 
 def test_ci_uses_approved_triggers_permissions_and_sha_pins() -> None:
@@ -36,6 +42,7 @@ def test_ci_uses_approved_triggers_permissions_and_sha_pins() -> None:
     action_uses = ACTION_REFERENCE.findall(workflow)
     assert action_uses
     assert all(re.search(r"@[0-9a-f]{40}$", action) for action in action_uses)
+    assert set(action_uses) == set(APPROVED_ACTIONS)
 
     for action in APPROVED_ACTIONS:
         assert action in workflow
