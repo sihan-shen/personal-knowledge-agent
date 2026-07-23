@@ -46,4 +46,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker run --rm pka-ci
-      - run: docker inspect --format '{{.Config.Healthcheck.Test}}' pka-ci
+      - run: >-
+          test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' pka-ci)"
+          = '["CMD","pka","health"]'

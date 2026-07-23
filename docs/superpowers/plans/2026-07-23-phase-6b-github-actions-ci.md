@@ -53,7 +53,11 @@ def test_ci_uses_approved_triggers_permissions_and_sha_pins() -> None:
     assert "main" in workflow
     assert "contents: read" in workflow
     assert "cancel-in-progress: true" in workflow
-    assert "@v" not in workflow
+    assert "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" in workflow
+    assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow
+    assert "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b" in workflow
+    assert "docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435" in workflow
+    assert "docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83" in workflow
     assert "PKA_" not in workflow
 
 
@@ -81,7 +85,11 @@ def test_ci_builds_and_runs_the_offline_container_after_quality() -> None:
     assert "load: true" in workflow
     assert "tags: pka-ci" in workflow
     assert "docker run --rm pka-ci" in workflow
-    assert "docker inspect --format" in workflow
+    expected_health_check = (
+        "test \"$(docker inspect --format '{{json .Config.Healthcheck.Test}}' "
+        "pka-ci)\" = '[\"CMD\",\"pka\",\"health\"]'"
+    )
+    assert expected_health_check in " ".join(workflow.split())
     assert "docker push" not in workflow
     assert "docker login" not in workflow
 ```
@@ -153,7 +161,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker run --rm pka-ci
-      - run: docker inspect --format '{{.Config.Healthcheck.Test}}' pka-ci
+      - run: >-
+          test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' pka-ci)"
+          = '["CMD","pka","health"]'
 ```
 
 - [ ] **Step 2: Verify GREEN and format**

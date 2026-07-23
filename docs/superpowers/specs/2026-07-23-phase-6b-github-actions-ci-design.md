@@ -61,7 +61,8 @@ then runs:
 
 ```bash
 docker run --rm pka-ci
-docker inspect --format '{{.Config.Healthcheck.Test}}' pka-ci
+test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' pka-ci)" \
+  = '["CMD","pka","health"]'
 ```
 
 The image is not pushed or loaded into a registry. The default `pka health` command is
@@ -73,7 +74,8 @@ supplied.
 Caches accelerate downloads and layers only. `uv sync --locked` still validates the
 lock on every run; a cache miss only redownloads packages. BuildKit cache misses run a
 full build. A quality failure prevents container validation. Docker setup, build, run,
-inspection, or cache failure fails the active job; no partial success is reported.
+health-check assertion, or cache failure fails the active job; no partial success is
+reported.
 
 ## Static regression test
 
