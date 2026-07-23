@@ -26,6 +26,7 @@ from personal_knowledge_agent.application.memory_aware_answer import (
 from personal_knowledge_agent.application.memory_proposal import MemoryProposalService
 from personal_knowledge_agent.application.memory_recall import MemoryRecallService
 from personal_knowledge_agent.application.search import SearchService
+from personal_knowledge_agent.composition import create_grounded_answer_service
 from personal_knowledge_agent.domain.errors import (
     EmbeddingError,
     EvaluationStorageError,
@@ -627,14 +628,7 @@ def _print_answer(answer: GroundedAnswer) -> None:
 
 
 def _ask(query: str, limit: int, mode: SearchMode, database: Path) -> None:
-    settings = load_llm_settings(os.environ)
-    index = SQLiteKeywordIndex(database, E5Embedder())
-    language_model = OpenAICompatibleChatModel(
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        model_id=settings.model_id,
-    )
-    answer = AnswerService(SearchService(index), language_model).answer(
+    answer = create_grounded_answer_service(database, os.environ).answer(
         query,
         limit=limit,
         mode=mode,

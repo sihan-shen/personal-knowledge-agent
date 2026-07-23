@@ -133,7 +133,20 @@ def run_cli(
             ),
         ),
         patch(
+            "personal_knowledge_agent.composition.E5Embedder",
+            return_value=selected_embedder,
+            side_effect=(
+                AssertionError("embedder construction must not run")
+                if forbid_embedder_construction
+                else None
+            ),
+        ),
+        patch(
             "personal_knowledge_agent.cli.OpenAICompatibleChatModel",
+            side_effect=create_model,
+        ),
+        patch(
+            "personal_knowledge_agent.composition.OpenAICompatibleChatModel",
             side_effect=create_model,
         ),
         patch.dict(os.environ, settings, clear=True),
