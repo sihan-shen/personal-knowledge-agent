@@ -36,7 +36,7 @@ from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settin
 
 DEFAULT_DEMO_DATABASE = Path(".pka/demo-knowledge.db")
 
-_API_LOGGER = logging.getLogger("personal_knowledge_agent.api")
+_API_LOGGER = logging.getLogger("uvicorn.error.personal_knowledge_agent.api")
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 

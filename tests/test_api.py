@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import io
 import logging
+import logging.config
 import re
 import sqlite3
 from contextlib import closing
@@ -11,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from uvicorn.config import LOGGING_CONFIG
 
 from personal_knowledge_agent.api import create_app
 from personal_knowledge_agent.application.ingest import IngestService
@@ -29,6 +32,7 @@ from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
 from tests.helpers import FakeEmbedder
 
 ROOT = Path(__file__).resolve().parents[1]
+API_LOGGER_NAME = "uvicorn.error.personal_knowledge_agent.api"
 
 
 def test_readme_documents_local_api_request_diagnostics() -> None:
@@ -43,12 +47,32 @@ def _request_record(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
     records = [
         record
         for record in caplog.records
-        if record.name == "personal_knowledge_agent.api"
+        if record.name == API_LOGGER_NAME
     ]
     assert len(records) == 1
     decoded = json.loads(records[0].message)
     assert isinstance(decoded, dict)
     return decoded
+
+
+def test_api_request_log_uses_default_uvicorn_error_logger(tmp_path: Path) -> None:
+    database = tmp_path / "demo.db"
+    _create_indexed_database(database)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.config.dictConfig(LOGGING_CONFIG)
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.addHandler(handler)
+    try:
+        client = TestClient(
+            create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
+        )
+        response = client.get("/health")
+    finally:
+        uvicorn_logger.removeHandler(handler)
+
+    assert response.status_code == 200
+    assert "api.request.completed" in stream.getvalue()
 
 
 class FakeAnswerer:
@@ -164,9 +188,14 @@ def test_api_preserves_a_valid_request_id_and_logs_safe_completion(
     client = TestClient(
         create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
     )
-    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+    caplog.set_level(logging.INFO, logger=API_LOGGER_NAME)
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.addHandler(caplog.handler)
 
-    response = client.get("/health", headers={"X-Request-ID": "demo-123"})
+    try:
+        response = client.get("/health", headers={"X-Request-ID": "demo-123"})
+    finally:
+        uvicorn_logger.removeHandler(caplog.handler)
 
     assert response.headers["x-request-id"] == "demo-123"
     record = _request_record(caplog)
@@ -204,10 +233,15 @@ def test_api_logs_not_ready_outcome_and_omits_question(
             answer_service_factory=FakeAnswerer,
         )
     )
-    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+    caplog.set_level(logging.INFO, logger=API_LOGGER_NAME)
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.addHandler(caplog.handler)
     question = "credential-like-value-must-not-appear"
 
-    response = client.post("/ask", json={"question": question})
+    try:
+        response = client.post("/ask", json={"question": question})
+    finally:
+        uvicorn_logger.removeHandler(caplog.handler)
 
     assert response.status_code == 503
     assert _request_record(caplog)["outcome"] == "not_ready"
@@ -227,9 +261,14 @@ def test_api_logs_model_error_outcome(
             answer_service_factory=FailingAnswerer,
         )
     )
-    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+    caplog.set_level(logging.INFO, logger=API_LOGGER_NAME)
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.addHandler(caplog.handler)
 
-    response = client.post("/ask", json={"question": "What is hybrid retrieval?"})
+    try:
+        response = client.post("/ask", json={"question": "What is hybrid retrieval?"})
+    finally:
+        uvicorn_logger.removeHandler(caplog.handler)
 
     assert response.status_code == 502
     assert _request_record(caplog)["outcome"] == "model_error"
