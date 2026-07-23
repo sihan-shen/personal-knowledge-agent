@@ -125,6 +125,19 @@ created by `mkdir -p` without changing their ownership. On a non-POSIX host, cho
 Docker Desktop file-sharing configuration that grants the container write access to
 both mounted directories.
 
+## Continuous integration
+
+GitHub Actions runs on every pull request and push to `main`. It validates the locked
+Python quality gate, then builds the Docker image and runs its offline default
+`pka health` command. CI does not call a provider, download E5, mount your knowledge
+base, or publish an image.
+
+Push from this WSL workspace with your configured WSL Git:
+
+```bash
+git push
+```
+
 ## Health check
 
 ```bash

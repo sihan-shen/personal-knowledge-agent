@@ -23,8 +23,8 @@ download E5, or use private knowledge data.
 - Run `quality` first; `container` declares `needs: quality` and has no `if: always()`.
 - CI receives no `.env`, provider secret, `.pka/`, model cache, user document, or
   registry credential.
-- Local WSL pushes use Windows Git, for example `/mnt/c/Program Files/Git/cmd/git.exe
-  push`; remote runners use their own checkout tooling.
+- Local WSL pushes use the user's configured WSL Git; remote runners use their own
+  checkout tooling.
 
 ## Architecture
 
@@ -90,8 +90,8 @@ for the runner image, Action execution, cache service, and Docker daemon.
 ## Documentation and acceptance
 
 README will state that CI validates only the offline quality/container contract, not
-provider calls, E5 download, or host-mount persistence. It will add the Windows
-`git.exe` WSL push example. A Phase 6B learning log explains CI versus CD, cache
+provider calls, E5 download, or host-mount persistence. It will add the WSL Git push
+example. A Phase 6B learning log explains CI versus CD, cache
 correctness, least-privilege tokens, SHA pins, and offline container checks.
 
 Acceptance requires PR and `main` push triggers; the full Python gate; a dependent
