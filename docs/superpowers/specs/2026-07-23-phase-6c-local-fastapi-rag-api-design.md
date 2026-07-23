@@ -104,9 +104,9 @@ make network calls, load real E5 weights, or require real provider credentials.
    commands and run the API locally with `uv run uvicorn
    personal_knowledge_agent.api:create_app --factory --host 127.0.0.1 --port 8000`.
 2. `/docs` exposes the generated OpenAPI documentation.
-3. `/health` reports `ready` only when both the demo database and valid model
-   configuration are available; otherwise it reports `degraded` without exposing
-   configuration values.
+3. `/health` reports `ready` only when the demo SQLite database is readable,
+   contains at least one indexed chunk, and valid model configuration is available;
+   otherwise it reports `degraded` without exposing configuration values.
 4. A configured `/ask` request returns a validated grounded-answer JSON response
    with citations; unavailable prerequisites return the specified safe errors.
 5. The full Python quality gate passes with deterministic tests.

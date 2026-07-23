@@ -58,6 +58,7 @@ Create `tests/test_composition.py`:
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,9 +226,15 @@ class FakeAnswerer:
         return GroundedAnswer(AnswerStatus.ANSWERED, "Hybrid retrieval combines rankings. [S1]", ("S1",), (evidence,), "fake-model")
 
 
+def create_indexed_database(database: Path) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
+        connection.execute("INSERT INTO chunks VALUES ('chunk-1')")
+
+
 def test_health_reports_degraded_when_model_configuration_is_missing(tmp_path: Path) -> None:
     database = tmp_path / "demo.db"
-    database.touch()
+    create_indexed_database(database)
     client = TestClient(create_app(database=database, environment={}))
 
     assert client.get("/health").json() == {
@@ -239,7 +246,7 @@ def test_health_reports_degraded_when_model_configuration_is_missing(tmp_path: P
 
 def test_ask_serializes_validated_grounded_citations(tmp_path: Path) -> None:
     database = tmp_path / "demo.db"
-    database.touch()
+    create_indexed_database(database)
     client = TestClient(
         create_app(
             database=database,
@@ -283,7 +290,9 @@ Create `src/personal_knowledge_agent/api.py` using this complete adapter shape:
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Literal
 
@@ -359,17 +368,28 @@ def create_app(
             return False
         return True
 
+    def knowledge_base_ready() -> bool:
+        if not selected_database.is_file():
+            return False
+        try:
+            database_uri = f"{selected_database.resolve().as_uri()}?mode=ro"
+            with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+                row = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()
+        except (OSError, sqlite3.Error):
+            return False
+        return row is not None and int(row[0]) > 0
+
     def health_response() -> HealthResponse:
-        knowledge_base_ready = selected_database.is_file()
+        indexed = knowledge_base_ready()
         configured = model_configured()
         return HealthResponse(
-            status="ready" if knowledge_base_ready and configured else "degraded",
-            knowledge_base_ready=knowledge_base_ready,
+            status="ready" if indexed and configured else "degraded",
+            knowledge_base_ready=indexed,
             model_configured=configured,
         )
 
     def require_answerer() -> GroundedQuestionAnswerer:
-        if not selected_database.is_file():
+        if not knowledge_base_ready():
             raise HTTPException(
                 status_code=503,
                 detail={"code": "knowledge_base_not_ready"},
@@ -433,7 +453,9 @@ def _serialize_answer(answer: GroundedAnswer) -> AskResponse:
 ```
 
 Inside the factory, use `selected_environment = os.environ if environment is None else environment`.
-Set `knowledge_base_ready` with `database.is_file()`. Set `model_configured` by
+Set `knowledge_base_ready` with a read-only SQLite query that returns true only when
+the database is readable and `SELECT COUNT(*) FROM chunks` is greater than zero;
+catch `sqlite3.Error` and return false. Set `model_configured` by
 calling `load_llm_settings(selected_environment)` and catching only
 `ConfigurationError`; never include its message in a response. `/health` returns
 `ready` only when both flags are true, otherwise `degraded`.
