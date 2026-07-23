@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -61,9 +62,10 @@ class FailingAnswerer:
 
 
 def _create_indexed_database(database: Path) -> None:
-    with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
-        connection.execute("INSERT INTO chunks VALUES ('chunk-1')")
+    with closing(sqlite3.connect(database)) as connection:
+        with connection:
+            connection.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
+            connection.execute("INSERT INTO chunks VALUES ('chunk-1')")
 
 
 def test_health_reports_degraded_when_model_configuration_is_missing(
@@ -85,7 +87,7 @@ def test_health_reports_degraded_when_model_configuration_is_missing(
 
 def test_health_reports_degraded_when_database_has_no_chunks(tmp_path: Path) -> None:
     database = tmp_path / "empty.db"
-    with sqlite3.connect(database):
+    with closing(sqlite3.connect(database)):
         pass
     client = TestClient(
         create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
