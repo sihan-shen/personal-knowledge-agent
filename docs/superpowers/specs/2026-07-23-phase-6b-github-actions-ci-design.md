@@ -23,8 +23,8 @@ download E5, or use private knowledge data.
 - Run `quality` first; `container` declares `needs: quality` and has no `if: always()`.
 - CI receives no `.env`, provider secret, `.pka/`, model cache, user document, or
   registry credential.
-- Local WSL pushes use Windows Git, for example `/mnt/c/Program Files/Git/cmd/git.exe
-  push`; remote runners use their own checkout tooling.
+- Local WSL pushes use the user's configured WSL Git; remote runners use their own
+  checkout tooling.
 
 ## Architecture
 
@@ -61,7 +61,8 @@ then runs:
 
 ```bash
 docker run --rm pka-ci
-docker inspect --format '{{.Config.Healthcheck.Test}}' pka-ci
+test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' pka-ci)" \
+  = '["CMD","pka","health"]'
 ```
 
 The image is not pushed or loaded into a registry. The default `pka health` command is
@@ -73,12 +74,14 @@ supplied.
 Caches accelerate downloads and layers only. `uv sync --locked` still validates the
 lock on every run; a cache miss only redownloads packages. BuildKit cache misses run a
 full build. A quality failure prevents container validation. Docker setup, build, run,
-inspection, or cache failure fails the active job; no partial success is reported.
+health-check assertion, or cache failure fails the active job; no partial success is
+reported.
 
 ## Static regression test
 
 Add dependency-free `tests/test_ci_workflow.py`, reading the controlled workflow text.
-It verifies PR/main triggers, `contents: read`, concurrency cancellation, SHA pins,
+It verifies PR/main triggers, `contents: read`, concurrency cancellation, that every
+`uses:` reference is a complete SHA-pinned member of the approved Action set,
 Python 3.12, uv 0.11.29, cache settings, locked installation, every quality command,
 `container` depending on `quality`, Buildx/GHA cache, Docker build/default run/health
 inspection, and absence of secrets, `.env`, `.pka/` mounts, registry login/push, and
@@ -90,8 +93,8 @@ for the runner image, Action execution, cache service, and Docker daemon.
 ## Documentation and acceptance
 
 README will state that CI validates only the offline quality/container contract, not
-provider calls, E5 download, or host-mount persistence. It will add the Windows
-`git.exe` WSL push example. A Phase 6B learning log explains CI versus CD, cache
+provider calls, E5 download, or host-mount persistence. It will add the WSL Git push
+example. A Phase 6B learning log explains CI versus CD, cache
 correctness, least-privilege tokens, SHA pins, and offline container checks.
 
 Acceptance requires PR and `main` push triggers; the full Python gate; a dependent
