@@ -9,13 +9,16 @@ description = "A personal knowledge management system built with RAG and Agent p
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.115.0",
     "openai>=2.0.0",
     "sentence-transformers>=5.0.0",
     "torch>=2.0.0",
+    "uvicorn>=0.30.0",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.27.0",
     "mypy>=1.16.0",
     "pytest>=8.3.0",
     "ruff>=0.11.0",
