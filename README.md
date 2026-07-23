@@ -20,6 +20,11 @@ open `.pka/knowledge.db` or use normal document RAG, the Agent, long-term memory
 embeddings, LLM query planning, or a fallback to another answer path. The existing
 `ask`, `agent`, routing, and long-term-memory workflows remain separate.
 
+Phase 5A adds deterministic bilingual RAG evaluation on the packaged XQuAD-mini
+suite. Phase 5B optionally uses a separately configured LLM Judge to assess
+relevance, evidence faithfulness, and answer completeness while preserving the
+deterministic report when `--judge` is omitted.
+
 ## Prerequisites
 
 - Python 3.12 or newer
@@ -56,6 +61,60 @@ export UV_LINK_MODE=copy
 
 These exports are already configured in `~/.bashrc`. Open a new shell or run
 `source ~/.bashrc` after changing that file.
+
+## Run with Docker
+
+Docker packages the production `pka` CLI. It does not contain your knowledge base,
+source documents, embedding-model cache, or `.env` file. Build the image from
+tracked source and the committed dependency lock:
+
+```bash
+docker build -t pka:local .
+docker run --rm pka:local
+```
+
+The default command is the offline health check. It does not call an LLM or download
+the embedding model.
+
+Persist application data and the model cache with explicit host directories:
+
+```bash
+mkdir -p .pka .pka-model-cache
+docker run --rm \
+  -v "$(pwd)/.pka:/workspace/.pka" \
+  -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
+  pka:local health
+```
+
+For ingestion, mount Markdown documents at `/input`. The read-only flag prevents the
+container changing source files:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/.pka:/workspace/.pka" \
+  -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
+  -v "$(pwd)/notes:/input:ro" \
+  pka:local ingest /input/rag.md
+```
+
+The first semantic or hybrid query downloads `intfloat/multilingual-e5-small`. Keep
+a network connection for that download; later containers reuse `.pka-model-cache`.
+If a bind mount is omitted, the corresponding data is deleted with the container.
+
+LLM-backed commands use runtime variables only. The CLI does not load `.env`, but
+Docker can pass it without copying it into the image:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v "$(pwd)/.pka:/workspace/.pka" \
+  -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
+  pka:local ask "RAG 为什么需要检索？"
+```
+
+Do not use build arguments for secrets. Remote-answer, Agent, graph, and Judge
+commands can send retrieved text to the configured provider; choose a provider whose
+data policy you trust.
 
 ## Health check
 
