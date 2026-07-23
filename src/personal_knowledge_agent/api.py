@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
 import sqlite3
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
+from starlette.middleware.base import RequestResponseEndpoint
 
 from personal_knowledge_agent.composition import create_grounded_answer_service
 from personal_knowledge_agent.domain.errors import (
@@ -29,6 +35,50 @@ from personal_knowledge_agent.domain.protocols import GroundedQuestionAnswerer
 from personal_knowledge_agent.infrastructure.llm_settings import load_llm_settings
 
 DEFAULT_DEMO_DATABASE = Path(".pka/demo-knowledge.db")
+
+_API_LOGGER = logging.getLogger("personal_knowledge_agent.api")
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _select_request_id(candidate: str | None) -> str:
+    if candidate is not None and _REQUEST_ID_PATTERN.fullmatch(candidate):
+        return candidate
+    return uuid4().hex
+
+
+def _outcome_for_status(status_code: int) -> str:
+    if 200 <= status_code < 400:
+        return "success"
+    if status_code == 502:
+        return "model_error"
+    if status_code == 503:
+        return "not_ready"
+    if 400 <= status_code < 500:
+        return "client_error"
+    return "server_error"
+
+
+def _log_completed_request(
+    *,
+    request_id: str,
+    method: str,
+    path: str,
+    status_code: int,
+    duration_ms: float,
+    exception_type: str | None = None,
+) -> None:
+    record: dict[str, str | int | float] = {
+        "event": "api.request.completed",
+        "request_id": request_id,
+        "method": method,
+        "path": path,
+        "status_code": status_code,
+        "outcome": _outcome_for_status(status_code),
+        "duration_ms": round(duration_ms, 2),
+    }
+    if exception_type is not None:
+        record["exception_type"] = exception_type
+    _API_LOGGER.info("%s", json.dumps(record, sort_keys=True))
 
 
 class AskRequest(BaseModel):
@@ -81,6 +131,35 @@ def create_app(
     selected_environment = os.environ if environment is None else environment
     selected_database = database.expanduser()
     app = FastAPI(title="Personal Knowledge Agent API", version="0.1.0")
+
+    @app.middleware("http")
+    async def observe_request(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        request_id = _select_request_id(request.headers.get("X-Request-ID"))
+        started_at = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception as error:
+            _log_completed_request(
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=500,
+                duration_ms=(perf_counter() - started_at) * 1_000,
+                exception_type=type(error).__name__,
+            )
+            raise
+        response.headers["X-Request-ID"] = request_id
+        _log_completed_request(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=(perf_counter() - started_at) * 1_000,
+        )
+        return response
 
     def model_configured() -> bool:
         try:

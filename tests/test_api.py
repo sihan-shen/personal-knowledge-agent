@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -26,6 +29,18 @@ from personal_knowledge_agent.infrastructure.sqlite_keyword_index import (
 from tests.helpers import FakeEmbedder
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _request_record(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "personal_knowledge_agent.api"
+    ]
+    assert len(records) == 1
+    decoded = json.loads(records[0].message)
+    assert isinstance(decoded, dict)
+    return decoded
 
 
 class FakeAnswerer:
@@ -130,6 +145,99 @@ def test_health_reports_ready_when_database_and_model_are_available(
         "knowledge_base_ready": True,
         "model_configured": True,
     }
+
+
+def test_api_preserves_a_valid_request_id_and_logs_safe_completion(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = tmp_path / "demo.db"
+    _create_indexed_database(database)
+    client = TestClient(
+        create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
+    )
+    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+
+    response = client.get("/health", headers={"X-Request-ID": "demo-123"})
+
+    assert response.headers["x-request-id"] == "demo-123"
+    record = _request_record(caplog)
+    assert record["event"] == "api.request.completed"
+    assert record["request_id"] == "demo-123"
+    assert record["method"] == "GET"
+    assert record["path"] == "/health"
+    assert record["status_code"] == 200
+    assert record["outcome"] == "success"
+    assert isinstance(record["duration_ms"], float)
+    assert record["duration_ms"] >= 0
+
+
+def test_api_replaces_an_invalid_request_id(tmp_path: Path) -> None:
+    database = tmp_path / "demo.db"
+    _create_indexed_database(database)
+    client = TestClient(
+        create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
+    )
+
+    response = client.get("/health", headers={"X-Request-ID": "invalid value"})
+
+    assert response.headers["x-request-id"] != "invalid value"
+    assert re.fullmatch(r"[0-9a-f]{32}", response.headers["x-request-id"])
+
+
+def test_api_logs_not_ready_outcome_and_omits_question(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = TestClient(
+        create_app(
+            database=tmp_path / "missing.db",
+            environment={"PKA_LLM_API_KEY": "test-key"},
+            answer_service_factory=FakeAnswerer,
+        )
+    )
+    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+    question = "credential-like-value-must-not-appear"
+
+    response = client.post("/ask", json={"question": question})
+
+    assert response.status_code == 503
+    assert _request_record(caplog)["outcome"] == "not_ready"
+    assert question not in caplog.text
+
+
+def test_api_logs_model_error_outcome(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = tmp_path / "demo.db"
+    _create_indexed_database(database)
+    client = TestClient(
+        create_app(
+            database=database,
+            environment={"PKA_LLM_API_KEY": "test-key"},
+            answer_service_factory=FailingAnswerer,
+        )
+    )
+    caplog.set_level(logging.INFO, logger="personal_knowledge_agent.api")
+
+    response = client.post("/ask", json={"question": "What is hybrid retrieval?"})
+
+    assert response.status_code == 502
+    assert _request_record(caplog)["outcome"] == "model_error"
+
+
+def test_api_adds_request_id_to_validation_errors(tmp_path: Path) -> None:
+    database = tmp_path / "demo.db"
+    _create_indexed_database(database)
+    client = TestClient(
+        create_app(database=database, environment={"PKA_LLM_API_KEY": "test-key"})
+    )
+
+    response = client.post("/ask", json={"question": "   "})
+
+    assert response.status_code == 422
+    assert re.fullmatch(r"[0-9a-f]{32}", response.headers["x-request-id"])
 
 
 def test_ask_serializes_validated_grounded_citations(tmp_path: Path) -> None:
