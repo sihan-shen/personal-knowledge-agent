@@ -31,6 +31,14 @@ from tests.helpers import FakeEmbedder
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_readme_documents_local_api_request_diagnostics() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "X-Request-ID" in readme
+    assert "api.request.completed" in readme
+    assert "question text" in readme
+
+
 def _request_record(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
     records = [
         record

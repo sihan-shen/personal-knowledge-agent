@@ -180,6 +180,25 @@ curl -X POST http://127.0.0.1:8000/ask \
   -d '{"question":"What is hybrid retrieval?"}'
 ```
 
+### Inspect local API requests
+
+Use a request ID while testing locally to connect one HTTP response to its
+completion record in the Uvicorn terminal:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/ask \
+  -H 'content-type: application/json' \
+  -H 'X-Request-ID: study-demo-01' \
+  -d '{"question":"What is hybrid retrieval?"}'
+```
+
+The `-i` option displays the returned `X-Request-ID` response header. Uvicorn's
+terminal receives one `api.request.completed` JSON record whose `request_id`
+matches that header. The record contains only request metadata: question text,
+answers, evidence, headers, API keys, and `.env` values are not logged. A
+malformed supplied request ID is replaced with a generated ID. This local API
+has no metrics endpoint or cloud telemetry enabled.
+
 `/health` reports `status: "degraded"` until both an indexed database and model
 configuration are available; its `knowledge_base_ready` and `model_configured`
 fields show which prerequisite is missing. `/ask` returns a structured `503`
