@@ -81,6 +81,7 @@ Persist application data and the model cache with explicit host directories:
 ```bash
 mkdir -p .pka .pka-model-cache
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd)/.pka:/workspace/.pka" \
   -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
   pka:local health
@@ -91,6 +92,7 @@ container changing source files:
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd)/.pka:/workspace/.pka" \
   -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
   -v "$(pwd)/notes:/input:ro" \
@@ -107,6 +109,7 @@ Docker can pass it without copying it into the image:
 ```bash
 docker run --rm \
   --env-file .env \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd)/.pka:/workspace/.pka" \
   -v "$(pwd)/.pka-model-cache:/home/pka/.cache" \
   pka:local ask "RAG 为什么需要检索？"
@@ -115,6 +118,12 @@ docker run --rm \
 Do not use build arguments for secrets. Remote-answer, Agent, graph, and Judge
 commands can send retrieved text to the configured provider; choose a provider whose
 data policy you trust.
+
+The image itself defaults to its non-root `pka` user. The mounted examples override
+that user with the current POSIX host UID/GID, so the container can write to directories
+created by `mkdir -p` without changing their ownership. On a non-POSIX host, choose a
+Docker Desktop file-sharing configuration that grants the container write access to
+both mounted directories.
 
 ## Health check
 

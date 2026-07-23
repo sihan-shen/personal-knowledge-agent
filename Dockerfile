@@ -5,7 +5,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 WORKDIR /build
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --no-install-project
@@ -24,7 +25,7 @@ RUN useradd --create-home --uid 10001 pka \
     && mkdir -p /workspace /home/pka/.cache \
     && chown -R pka:pka /workspace /home/pka
 
-COPY --from=builder --chown=pka:pka /build/.venv /opt/venv
+COPY --from=builder --chown=pka:pka /opt/venv /opt/venv
 
 WORKDIR /workspace
 USER pka

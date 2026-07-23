@@ -12,5 +12,6 @@ build/
 *.egg-info/
 .env
 .pka/
+.pka-model-cache/
 *.db-wal
 *.db-shm
