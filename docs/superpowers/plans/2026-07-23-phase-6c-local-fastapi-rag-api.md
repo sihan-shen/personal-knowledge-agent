@@ -6,12 +6,12 @@
 
 **Architecture:** Keep FastAPI in a top-level adapter module. Extract one shared outer-layer composition root so the CLI and API construct the same existing `AnswerService`; keep domain and application packages framework-independent. The API checks database and model configuration readiness before invoking the service and serializes only the validated `GroundedAnswer` fields.
 
-**Tech Stack:** Python 3.12+, FastAPI, Uvicorn, HTTPX TestClient, pytest, existing SQLite/BM25/E5 hybrid retrieval, OpenAI-compatible Chat Completions.
+**Tech Stack:** Python 3.12+, FastAPI, Uvicorn, HTTPX2 TestClient, pytest, existing SQLite/BM25/E5 hybrid retrieval, OpenAI-compatible Chat Completions.
 
 ## Global Constraints
 
 - Bind only to `127.0.0.1`; Phase 6C performs no cloud deployment or Docker entrypoint change.
-- Use `fastapi`, `uvicorn`, and `httpx`; do not add a configuration framework or automatic `.env` loader.
+- Use `fastapi`, `uvicorn`, and `httpx2`; do not add a configuration framework or automatic `.env` loader.
 - API supports only existing grounded RAG, fixed `SearchMode.HYBRID`, and a fixed evidence limit of five.
 - The demo Markdown corpus is committed under `docs/demo-knowledge/`; `.pka/demo-knowledge.db` remains ignored and is built explicitly through existing `pka ingest` commands.
 - `POST /ask` error payloads must never reveal `PKA_LLM_*` values, provider responses, prompts, or secrets.
@@ -194,7 +194,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx>=0.27.0",
+    "httpx2>=2.9.0",
     "mypy>=1.16.0",
     "pytest>=8.3.0",
     "ruff>=0.11.0",
