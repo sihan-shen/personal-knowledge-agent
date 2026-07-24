@@ -1,4 +1,4 @@
-# Phase 1C: PDF Ingestion
+# Stage 7A: PDF Ingestion
 
 ## What changed
 

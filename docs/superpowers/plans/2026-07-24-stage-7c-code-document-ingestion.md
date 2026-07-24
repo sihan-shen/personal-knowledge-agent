@@ -1,4 +1,4 @@
-# Phase 1E: Code Document Ingestion Plan
+# Stage 7C: Code Document Ingestion Plan
 
 1. Write failing loader tests, then implement `CodeDocumentLoader` with explicit
    suffix, size, binary, encoding, empty-content, and Python-heading behavior.

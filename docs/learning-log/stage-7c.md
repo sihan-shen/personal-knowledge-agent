@@ -1,4 +1,4 @@
-# Phase 1E: Code Document Ingestion
+# Stage 7C: Code Document Ingestion
 
 ## What changed
 

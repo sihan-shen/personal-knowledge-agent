@@ -1,4 +1,4 @@
-# Phase 1D: Web Ingestion Implementation Plan
+# Stage 7B: Web Ingestion Implementation Plan
 
 **Goal:** Safely ingest one public static HTML URL through the existing CLI.
 
@@ -27,7 +27,7 @@ URLs to it; all downstream chunking and retrieval stay unchanged.
 
 ## Task 3: Documentation and complete quality gate
 
-- Update `README.md` and add `docs/learning-log/phase-1d.md`.
+- Update `README.md` and add `docs/learning-log/stage-7b.md`.
 - Document the explicit single-URL command, static-HTML limit, and security
   refusals without suggesting private-network access.
 - Run `pytest -W error`, full pytest, Ruff format/check, mypy, health, and lock

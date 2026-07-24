@@ -1,4 +1,4 @@
-# Phase 1C: PDF Ingestion Implementation Plan
+# Stage 7A: PDF Ingestion Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task.
 
@@ -68,7 +68,7 @@ Ruff, mypy, uv.
 
 **Files:**
 - Modify: `README.md`
-- Create: `docs/learning-log/phase-1c.md`
+- Create: `docs/learning-log/stage-7a.md`
 - Modify: `tests/test_cli.py`
 
 - [ ] Add a failing README-content test for `pka ingest notes/rag.pdf`, page

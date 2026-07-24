@@ -91,5 +91,14 @@ gate before a feature is merged.
   structured scores for relevance, evidence-only faithfulness, and reference-only
   completeness; two isolated Judge calls per answered case; schema-v2 reports; and
   fail-closed output behavior.
-- Broader evaluation (including Agent, memory, graph, refusal quality, PDF/web/code
-  ingestion, and deployment evaluation) remains future work.
+- Phase 6 is complete for the local-only scope: Docker CLI runtime, GitHub Actions
+  quality checks, a local FastAPI grounded-RAG API, and privacy-safe request
+  diagnostics.
+- Stage 7A is complete: text-based local PDF ingestion with page-level evidence
+  provenance and safe refusal of encrypted or textless PDFs.
+- Stage 7B is complete: explicit single-page public static-HTML ingestion with
+  URL/IP safety checks, bounded fetching, and visible-text extraction.
+- Stage 7C is complete: explicit local code/development-document ingestion for
+  supported UTF-8 source files, bounded input, and Python declaration headings.
+- Broader evaluation (including Agent, memory, graph, refusal quality, and
+  deployment evaluation) remains future work.

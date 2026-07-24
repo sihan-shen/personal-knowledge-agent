@@ -1,4 +1,4 @@
-# Phase 1C: PDF Ingestion Design
+# Stage 7A: PDF Ingestion Design
 
 **Date:** 2026-07-24
 
@@ -65,7 +65,7 @@ the resolved filename suffix; no user-facing format flag is added.
 | `tests/unit/test_pdf_loader.py` | Deterministic parser tests with test-created PDFs and fake reader seams where required. |
 | `tests/test_cli.py` | PDF ingestion, page provenance, and unchanged Markdown behavior. |
 | `pyproject.toml`, `uv.lock` | Add locked `pypdf` runtime dependency. |
-| `README.md`, `docs/learning-log/phase-1c.md` | Explain supported PDF limits and local usage. |
+| `README.md`, `docs/learning-log/stage-7a.md` | Explain supported PDF limits and local usage. |
 
 Tests must never download a model, call an LLM, depend on a user PDF, or perform
 OCR. They must cover two nonempty pages, skipped blank pages, unsupported suffix,

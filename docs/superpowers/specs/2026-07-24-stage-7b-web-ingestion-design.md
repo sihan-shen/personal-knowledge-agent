@@ -1,4 +1,4 @@
-# Phase 1D: Web Ingestion Design
+# Stage 7B: Web Ingestion Design
 
 **Date:** 2026-07-24
 
