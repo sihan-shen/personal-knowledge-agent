@@ -30,7 +30,11 @@ Ruff, mypy, uv.
 **Files:**
 - Create: `src/personal_knowledge_agent/infrastructure/pdf_loader.py`
 - Create: `tests/unit/test_pdf_loader.py`
+- Modify: `pyproject.toml`
+- Modify: `uv.lock`
 
+- [ ] Add a bounded `pypdf` runtime dependency and regenerate `uv.lock` so the
+  test-created PDFs use the same parser dependency as production.
 - [ ] Write failing tests for a two-page PDF, skipped blank page, unsupported
   suffix, missing path, encrypted reader, parser error, and fully textless PDF.
 - [ ] Run `uv run pytest tests/unit/test_pdf_loader.py -q` and observe failure
@@ -48,8 +52,6 @@ Ruff, mypy, uv.
 **Files:**
 - Create: `src/personal_knowledge_agent/infrastructure/local_document_loader.py`
 - Modify: `src/personal_knowledge_agent/cli.py`
-- Modify: `pyproject.toml`
-- Modify: `uv.lock`
 - Modify: `tests/test_cli.py`
 
 - [ ] Write failing CLI tests that ingest a generated two-page PDF, re-ingest
@@ -59,7 +61,6 @@ Ruff, mypy, uv.
 - [ ] Add `LocalDocumentLoader` selecting `MarkdownLoader` for `.md` and
   `.markdown`, `PdfLoader` for `.pdf`, and raising `UnsupportedDocumentError`
   otherwise. Replace CLI's direct `MarkdownLoader()` construction with it.
-- [ ] Add a bounded `pypdf` runtime dependency and regenerate `uv.lock`.
 - [ ] Run focused tests, `uv lock --check`, Ruff, and mypy.
 - [ ] Commit `feat: ingest PDF documents from the CLI`.
 
