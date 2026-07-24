@@ -8,6 +8,7 @@ import re
 import shlex
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from personal_knowledge_agent.application.agent import AgentService
 from personal_knowledge_agent.application.answer import AnswerService
@@ -82,10 +83,11 @@ from personal_knowledge_agent.infrastructure.llm_settings import (
     load_judge_llm_settings,
     load_llm_settings,
 )
-from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
 from personal_knowledge_agent.infrastructure.local_document_loader import (
     LocalDocumentLoader,
 )
+from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
+from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.memory_prefilter import (
     should_extract_memory,
 )
@@ -212,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
         "ingest",
         help="Index one local Markdown document.",
     )
-    ingest_parser.add_argument("path", type=Path)
+    ingest_parser.add_argument("path")
     ingest_parser.add_argument("--db", type=Path, default=_DEFAULT_DATABASE)
 
     search_parser = subparsers.add_parser(
@@ -400,10 +402,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _ingest(path: Path, database: Path) -> None:
+def _ingest(source: str, database: Path) -> None:
     index = SQLiteKeywordIndex(database, E5Embedder())
     service = IngestService(LocalDocumentLoader(), MarkdownChunker(), index)
-    result = service.ingest(path)
+    input_source: Path | str
+    if urlsplit(source).scheme.lower() in {"http", "https"}:
+        input_source = source
+    else:
+        input_source = Path(source)
+    result = service.ingest(input_source)
     action = "Reindexed" if result.replaced else "Indexed"
     print(f"{action} {result.chunk_count} chunks from {result.source}")
 

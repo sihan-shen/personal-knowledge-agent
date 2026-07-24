@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from personal_knowledge_agent.domain.evaluation import (
     FaithfulnessJudgeRequest,
@@ -58,10 +58,13 @@ class LanguageModel(Protocol):
         ...
 
 
-class DocumentLoader(Protocol):
-    """Load one source path into a document."""
+DocumentSource = TypeVar("DocumentSource", contravariant=True)
 
-    def load(self, path: Path) -> Document:
+
+class DocumentLoader(Protocol[DocumentSource]):
+    """Load one source into a document."""
+
+    def load(self, source: DocumentSource) -> Document:
         """Load and validate a document."""
         ...
 

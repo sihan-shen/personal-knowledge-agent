@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from personal_knowledge_agent.domain.errors import EmptyDocumentError
 from personal_knowledge_agent.domain.models import IngestionResult
 from personal_knowledge_agent.domain.protocols import (
@@ -13,12 +11,12 @@ from personal_knowledge_agent.domain.protocols import (
 )
 
 
-class IngestService:
+class IngestService[Source]:
     """Coordinate loading, chunking, and atomic indexing."""
 
     def __init__(
         self,
-        loader: DocumentLoader,
+        loader: DocumentLoader[Source],
         chunker: Chunker,
         index: KnowledgeIndex,
     ) -> None:
@@ -26,9 +24,9 @@ class IngestService:
         self._chunker = chunker
         self._index = index
 
-    def ingest(self, path: Path) -> IngestionResult:
+    def ingest(self, source: Source) -> IngestionResult:
         """Ingest one source and report what changed."""
-        document = self._loader.load(path)
+        document = self._loader.load(source)
         chunks = self._chunker.split(document)
         if not chunks:
             raise EmptyDocumentError(

@@ -51,6 +51,7 @@ from personal_knowledge_agent.domain.memory import (
 )
 from personal_knowledge_agent.domain.models import (
     Chunk,
+    Document,
     MessageRole,
     ModelOutput,
     SearchMode,
@@ -297,6 +298,28 @@ def test_ingest_and_search_persist_across_processes(tmp_path: Path) -> None:
         "   RAG 使用检索增强生成来选择 relevant evidence.\n"
     )
     assert searched.stderr == ""
+
+
+def test_ingest_url_preserves_source_in_search_evidence(tmp_path: Path) -> None:
+    source = "https://public.example/articles/rag"
+    database = tmp_path / "knowledge.db"
+
+    class FakeWebLoader:
+        def load(self, url: str) -> Document:
+            assert url == source
+            return Document("web-document", url, "# RAG\n\nWeb retrieval evidence.")
+
+    with patch(
+        "personal_knowledge_agent.infrastructure.local_document_loader.WebLoader",
+        return_value=FakeWebLoader(),
+    ):
+        ingested = run_cli("ingest", source, "--db", str(database))
+        searched = run_cli("search", "RAG", "--db", str(database))
+
+    assert ingested.returncode == 0
+    assert ingested.stdout == f"Indexed 1 chunks from {source}\n"
+    assert searched.returncode == 0
+    assert f"{source} > RAG" in searched.stdout
 
 
 def test_reingest_reports_replacement(tmp_path: Path) -> None:

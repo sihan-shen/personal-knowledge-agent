@@ -34,6 +34,24 @@ def test_routes_pdf_and_markdown_suffixes_to_their_loaders(tmp_path: Path) -> No
     assert pdf.paths == [tmp_path / "paper.pdf"]
 
 
+def test_routes_http_url_to_web_loader_without_converting_it_to_a_path() -> None:
+    web = RecordingWebLoader()
+    loader = LocalDocumentLoader(web_loader=web)
+
+    loader.load("https://public.example/articles/rag?language=en")
+
+    assert web.urls == ["https://public.example/articles/rag?language=en"]
+
+
 def test_rejects_unknown_local_document_suffix(tmp_path: Path) -> None:
     with pytest.raises(UnsupportedDocumentError):
         LocalDocumentLoader().load(tmp_path / "note.txt")
+
+
+class RecordingWebLoader:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def load(self, url: str) -> Document:
+        self.urls.append(url)
+        return Document("web-document", url, "content")
