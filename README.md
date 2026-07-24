@@ -230,6 +230,19 @@ uv run pka ingest notes/rag.md
 uv run pka search "RAG 如何检索 knowledge"
 ```
 
+### Ingest text-based PDFs
+
+`pka ingest` also accepts a local PDF with an extractable text layer:
+
+```bash
+uv run pka ingest notes/rag.pdf --db .pka/knowledge.db
+```
+
+The loader keeps page provenance, so search and answer evidence identify the
+source as `.../rag.pdf > Page N`. It supports only unencrypted, text-based PDFs.
+Scanned/image-only PDFs, encrypted PDFs, tables, and images are outside this
+local extractor's scope; run OCR before ingesting a scanned PDF.
+
 Search defaults to hybrid retrieval. Select a mode explicitly when comparing
 retrieval behavior:
 

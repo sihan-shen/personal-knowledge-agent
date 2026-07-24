@@ -83,6 +83,16 @@ class CliResult:
     stderr: str
 
 
+def test_readme_documents_text_based_pdf_ingestion() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "pka ingest notes/rag.pdf" in readme
+    assert "Page N" in readme
+    assert "OCR" in readme
+
+
 def run_cli(
     *arguments: str,
     language_model: LanguageModel | None = None,

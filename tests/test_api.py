@@ -44,11 +44,7 @@ def test_readme_documents_local_api_request_diagnostics() -> None:
 
 
 def _request_record(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
-    records = [
-        record
-        for record in caplog.records
-        if record.name == API_LOGGER_NAME
-    ]
+    records = [record for record in caplog.records if record.name == API_LOGGER_NAME]
     assert len(records) == 1
     decoded = json.loads(records[0].message)
     assert isinstance(decoded, dict)
