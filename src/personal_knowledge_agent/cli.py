@@ -83,7 +83,9 @@ from personal_knowledge_agent.infrastructure.llm_settings import (
     load_llm_settings,
 )
 from personal_knowledge_agent.infrastructure.markdown_chunker import MarkdownChunker
-from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
+from personal_knowledge_agent.infrastructure.local_document_loader import (
+    LocalDocumentLoader,
+)
 from personal_knowledge_agent.infrastructure.memory_prefilter import (
     should_extract_memory,
 )
@@ -400,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _ingest(path: Path, database: Path) -> None:
     index = SQLiteKeywordIndex(database, E5Embedder())
-    service = IngestService(MarkdownLoader(), MarkdownChunker(), index)
+    service = IngestService(LocalDocumentLoader(), MarkdownChunker(), index)
     result = service.ingest(path)
     action = "Reindexed" if result.replaced else "Indexed"
     print(f"{action} {result.chunk_count} chunks from {result.source}")
