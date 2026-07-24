@@ -257,6 +257,19 @@ private and loopback targets, disables redirects, and limits response size. It
 does not crawl links, execute JavaScript, use login cookies, or guarantee that
 the remote page remains unchanged after ingestion.
 
+### Ingest local code documents
+
+Explicit local source files use the same command:
+
+```bash
+uv run pka ingest src/example.py --db .pka/knowledge.db
+```
+
+Supported UTF-8 files are Python, JSON, YAML, TOML, text, and RST, up to 1 MiB.
+Python top-level classes and functions become evidence headings. Directory
+ingestion, code execution, binary files, and AST analysis are intentionally out
+of scope.
+
 Search defaults to hybrid retrieval. Select a mode explicitly when comparing
 retrieval behavior:
 

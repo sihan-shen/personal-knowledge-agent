@@ -7,6 +7,9 @@ from pathlib import Path
 from personal_knowledge_agent.domain.errors import UnsupportedDocumentError
 from personal_knowledge_agent.domain.models import Document
 from personal_knowledge_agent.domain.protocols import DocumentLoader
+from personal_knowledge_agent.infrastructure.code_document_loader import (
+    CodeDocumentLoader,
+)
 from personal_knowledge_agent.infrastructure.markdown_loader import MarkdownLoader
 from personal_knowledge_agent.infrastructure.pdf_loader import PdfLoader
 from personal_knowledge_agent.infrastructure.web_loader import WebLoader
@@ -20,10 +23,12 @@ class LocalDocumentLoader:
         *,
         markdown_loader: DocumentLoader[Path] | None = None,
         pdf_loader: DocumentLoader[Path] | None = None,
+        code_loader: DocumentLoader[Path] | None = None,
         web_loader: DocumentLoader[str] | None = None,
     ) -> None:
         self._markdown_loader = markdown_loader or MarkdownLoader()
         self._pdf_loader = pdf_loader or PdfLoader()
+        self._code_loader = code_loader or CodeDocumentLoader()
         self._web_loader = web_loader or WebLoader()
 
     def load(self, source: Path | str) -> Document:
@@ -37,6 +42,8 @@ class LocalDocumentLoader:
             return self._markdown_loader.load(path)
         if suffix == ".pdf":
             return self._pdf_loader.load(path)
+        if suffix in {".py", ".json", ".yaml", ".yml", ".toml", ".txt", ".rst"}:
+            return self._code_loader.load(path)
         raise UnsupportedDocumentError(
             f"Only Markdown (.md, .markdown) and PDF (.pdf) are supported: {path}"
         )
