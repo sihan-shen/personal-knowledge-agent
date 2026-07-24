@@ -243,6 +243,20 @@ source as `.../rag.pdf > Page N`. It supports only unencrypted, text-based PDFs.
 Scanned/image-only PDFs, encrypted PDFs, tables, and images are outside this
 local extractor's scope; run OCR before ingesting a scanned PDF.
 
+### Ingest one public web page
+
+`pka ingest` also accepts one public static HTML URL:
+
+```bash
+uv run pka ingest https://example.com/article --db .pka/knowledge.db
+```
+
+The stored source remains the URL, so retrieved evidence is traceable to that
+page. This local fetcher accepts only public `http`/`https` HTML, rejects
+private and loopback targets, disables redirects, and limits response size. It
+does not crawl links, execute JavaScript, use login cookies, or guarantee that
+the remote page remains unchanged after ingestion.
+
 Search defaults to hybrid retrieval. Select a mode explicitly when comparing
 retrieval behavior:
 

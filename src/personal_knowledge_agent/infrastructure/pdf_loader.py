@@ -52,7 +52,8 @@ class PdfLoader:
 
         if not sections:
             raise EmptyDocumentError(
-                f"PDF has no extractable text; OCR is required before ingestion: {resolved}"
+                "PDF has no extractable text; OCR is required before ingestion: "
+                f"{resolved}"
             )
 
         source = str(resolved)
