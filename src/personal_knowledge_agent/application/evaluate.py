@@ -70,7 +70,7 @@ class EvaluationService:
     def __init__(
         self,
         corpus_loader: EvaluationCorpusLoader,
-        ingester: IngestService,
+        ingester: IngestService[Path],
         answerer: GroundedQuestionAnswerer,
         faithfulness_judge: FaithfulnessJudge | None = None,
         reference_quality_judge: ReferenceQualityJudge | None = None,
