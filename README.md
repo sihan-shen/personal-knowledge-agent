@@ -42,25 +42,10 @@ the default Hugging Face cache (normally `~/.cache/huggingface/hub`). Model
 inference is explicitly configured for CPU, so a GPU is not required. Keep the
 machine online for the first model download.
 
-### WSL environment
+### Local environment
 
-This repository's current WSL location is:
-
-```bash
-/mnt/c/Users/19850/Projects/RAG-Agent
-```
-
-Run project commands from that directory (not the previous native-Linux path
-under `/home/sihan/文档/...`). On this Windows-mounted filesystem, keep Python
-temporary files in WSL's Linux filesystem and ask uv to copy cached packages:
-
-```bash
-export TMPDIR=/tmp
-export UV_LINK_MODE=copy
-```
-
-These exports are already configured in `~/.bashrc`. Open a new shell or run
-`source ~/.bashrc` after changing that file.
+Run the commands from the repository root. The project uses `uv` and a local
+`.venv`; no OS-specific path configuration is required.
 
 ## Run with Docker
 
@@ -132,7 +117,7 @@ Python quality gate, then builds the Docker image and runs its offline default
 `pka health` command. CI does not call a provider, download E5, mount your knowledge
 base, or publish an image.
 
-Push from this WSL workspace with your configured WSL Git:
+Push from the repository root with your configured Git:
 
 ```bash
 git push

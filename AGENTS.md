@@ -8,13 +8,8 @@ capabilities merely to make the project look complete.
 
 ## Workspace and environment
 
-- Canonical WSL repository: `/mnt/c/Users/19850/Projects/RAG-Agent`.
-- A compatibility symlink exists at
-  `/home/sihan/文档/Projects/RAG-Agent` for older Codex task contexts. Do not use
-  it as a second checkout or move the repository there.
-- The project uses `uv` and a local `.venv`. On this Windows-mounted filesystem,
-  run commands with `TMPDIR=/tmp` and `UV_LINK_MODE=copy` when the shell has not
-  already loaded those exports from `~/.bashrc`.
+- Run commands from the repository root; do not create a second checkout.
+- The project uses `uv` and a local `.venv`.
 - Keep generated knowledge bases under `.pka/`; never commit them.
 
 ## Common commands

@@ -19,12 +19,9 @@ uv run mypy src
 uv run pytest
 ```
 
-## WSL migration note
+## Environment note
 
-- The active repository is `/mnt/c/Users/19850/Projects/RAG-Agent`; it is not
-  located under the former native-Linux path `/home/sihan/文档/Projects/RAG-Agent`.
-- `TMPDIR=/tmp` keeps pytest and Python temporary files off the Windows-mounted
-  filesystem, which avoids temporary-file cleanup failures.
-- `UV_LINK_MODE=copy` avoids uv's cross-filesystem link warning on `/mnt/c`.
-- Both variables are exported by `~/.bashrc`; use `source ~/.bashrc` or open a
-  new shell before running the standard commands.
+- Run the project from the repository root; do not create a second checkout.
+- `TMPDIR=/tmp` can keep Python temporary files off a Windows-mounted filesystem.
+- `UV_LINK_MODE=copy` avoids uv's cross-filesystem link warning on such a filesystem.
+- Set these variables in your shell profile if needed.
