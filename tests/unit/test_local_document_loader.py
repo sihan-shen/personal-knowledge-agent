@@ -45,7 +45,7 @@ def test_routes_http_url_to_web_loader_without_converting_it_to_a_path() -> None
 
 def test_rejects_unknown_local_document_suffix(tmp_path: Path) -> None:
     with pytest.raises(UnsupportedDocumentError):
-        LocalDocumentLoader().load(tmp_path / "note.txt")
+        LocalDocumentLoader().load(tmp_path / "note.docx")
 
 
 class RecordingWebLoader:

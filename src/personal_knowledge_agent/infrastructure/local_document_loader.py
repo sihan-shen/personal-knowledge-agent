@@ -45,5 +45,6 @@ class LocalDocumentLoader:
         if suffix in {".py", ".json", ".yaml", ".yml", ".toml", ".txt", ".rst"}:
             return self._code_loader.load(path)
         raise UnsupportedDocumentError(
-            f"Only Markdown (.md, .markdown) and PDF (.pdf) are supported: {path}"
+            f"Unsupported local document format for {path}; expected Markdown, PDF, "
+            "or a supported code/text extension"
         )
